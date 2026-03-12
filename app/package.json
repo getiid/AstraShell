@@ -40,6 +40,8 @@
       "package.json"
     ],
     "mac": {
+      "identity": null,
+      "hardenedRuntime": false,
       "target": [
         "dmg"
       ],

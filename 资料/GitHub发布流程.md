@@ -11,13 +11,15 @@ git push origin main
 ## 2. 生成安装包
 ```bash
 cd /Users/jonny/Desktop/AstraShell/app
-npm run build
-npx electron-builder --mac --arm64 --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false
+npm run dist
 ```
 
 输出文件：
 - `app/release/AstraShell-0.2.0-arm64.dmg`
 - `app/release/AstraShell-0.2.0-arm64.dmg.blockmap`
+
+说明：
+- 当前配置默认 `mac.identity = null`，会跳过签名，优先保证可打包可运行。
 
 ## 3. 发布 GitHub Release
 ```bash
