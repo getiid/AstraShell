@@ -306,7 +306,7 @@ function logMain(message) {
 function buildAppMenu() {
   const template = [
     {
-      label: 'LightTerm',
+      label: 'AstraShell',
       submenu: [
         { role: 'about' },
         { type: 'separator' },
@@ -355,7 +355,7 @@ function createWindow() {
     height: 860,
     minWidth: 1080,
     minHeight: 680,
-    title: 'LightTerm',
+    title: 'AstraShell',
     titleBarStyle: 'default',
     movable: true,
     backgroundColor: '#f3f4f6',
@@ -401,7 +401,7 @@ app.whenReady().then(() => {
       const p = path.join(app.getPath('userData'), 'fatal.log')
       fs.appendFileSync(p, `[${new Date().toISOString()}] ${e?.stack || e?.message || e}\n`, 'utf8')
     } catch {}
-    dialog.showErrorBox('LightTerm 启动失败', String(e?.message || e))
+    dialog.showErrorBox('AstraShell 启动失败', String(e?.message || e))
   }
 
   app.on('activate', () => {
