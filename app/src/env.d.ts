@@ -1,0 +1,57 @@
+/// <reference types="vite/client" />
+
+type SSHConfig = { host: string; port?: number; username: string; password?: string; privateKey?: string; passphrase?: string }
+
+declare global {
+  interface Window {
+    lightterm: {
+      appGetStorage: () => Promise<{ ok: boolean; dbPath?: string }>
+      appPickStorageFolder: () => Promise<{ ok: boolean; folder?: string; error?: string }>
+      appSetStorageFolder: (payload: { folder: string }) => Promise<{ ok: boolean; dbPath?: string; restartRequired?: boolean; error?: string }>
+
+      hostsList: () => Promise<{ ok: boolean; items?: any[] }>
+      hostsSave: (payload: any) => Promise<{ ok: boolean; id?: string; error?: string }>
+      hostsDelete: (payload: { id: string }) => Promise<{ ok: boolean; error?: string }>
+
+      vaultStatus: () => Promise<{ ok: boolean; initialized: boolean; unlocked: boolean }>
+      vaultSetMaster: (payload: { masterPassword: string }) => Promise<{ ok: boolean; error?: string }>
+      vaultUnlock: (payload: { masterPassword: string }) => Promise<{ ok: boolean; error?: string }>
+      vaultReset: () => Promise<{ ok: boolean; error?: string }>
+      vaultKeyList: () => Promise<{ ok: boolean; items?: any[]; error?: string }>
+      vaultKeySave: (payload: { id?: string; name: string; type?: string; fingerprint?: string; privateKey: string; publicKey?: string; certificate?: string }) => Promise<{ ok: boolean; id?: string; detectedType?: string; error?: string }>
+      vaultKeyGet: (payload: { id: string }) => Promise<{ ok: boolean; item?: any; error?: string }>
+      vaultKeyImportFile: () => Promise<{ ok: boolean; content?: string; detectedType?: string; filePath?: string; raw?: string; error?: string }>
+
+      syncLogin: (payload: { provider?: string; userId?: string; token?: string }) => Promise<{ ok: boolean; error?: string }>
+      syncStatus: () => Promise<{ ok: boolean; account?: any; queueCount?: number }>
+      syncQueue: () => Promise<{ ok: boolean; items?: any[] }>
+      syncClearQueue: () => Promise<{ ok: boolean }>
+      syncPushNow: () => Promise<{ ok: boolean; pushed?: number }>
+
+      listSerialPorts: () => Promise<any[]>
+      openSerial: (options: { path: string; baudRate?: number; dataBits?: number; stopBits?: number; parity?: 'none' | 'even' | 'odd' }) => Promise<{ ok: boolean; error?: string }>
+      sendSerial: (payload: { path: string; data: string; isHex?: boolean }) => Promise<{ ok: boolean; error?: string }>
+      onSerialData: (handler: (data: { path: string; data: string }) => void) => void
+
+      sshTest: (config: SSHConfig) => Promise<{ ok: boolean; error?: string }>
+      sshConnect: (config: SSHConfig & { sessionId: string }) => Promise<{ ok: boolean; error?: string }>
+      sshWrite: (payload: { sessionId: string; data: string }) => Promise<{ ok: boolean; error?: string }>
+      sshResize: (payload: { sessionId: string; cols: number; rows: number }) => Promise<{ ok: boolean; error?: string }>
+      sshDisconnect: (payload: { sessionId: string }) => Promise<{ ok: boolean; error?: string }>
+      onSshData: (handler: (data: { sessionId: string; data: string }) => void) => void
+      onSshClose: (handler: (data: { sessionId: string }) => void) => void
+      onSshError: (handler: (data: { sessionId: string; error: string }) => void) => void
+
+      onSftpProgress: (handler: (data: { type: 'upload' | 'download'; percent: number; transferred?: number; total?: number; done?: boolean }) => void) => void
+      localfsList: (payload: { localPath?: string }) => Promise<{ ok: boolean; error?: string; path?: string; items?: any[] }>
+      sftpList: (payload: SSHConfig & { remotePath?: string }) => Promise<{ ok: boolean; error?: string; items?: any[] }>
+      sftpUpload: (payload: SSHConfig & { remoteDir?: string; localFile?: string }) => Promise<{ ok: boolean; error?: string; localFile?: string; remoteFile?: string }>
+      sftpDownload: (payload: SSHConfig & { remoteFile: string }) => Promise<{ ok: boolean; error?: string; filePath?: string }>
+      sftpMkdir: (payload: SSHConfig & { remoteDir: string }) => Promise<{ ok: boolean; error?: string }>
+      sftpRename: (payload: SSHConfig & { oldPath: string; newPath: string }) => Promise<{ ok: boolean; error?: string }>
+      sftpDelete: (payload: SSHConfig & { remoteFile: string }) => Promise<{ ok: boolean; error?: string }>
+    }
+  }
+}
+
+export {}

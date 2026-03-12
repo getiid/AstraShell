@@ -1,0 +1,71 @@
+{
+  "name": "lightterm-desktop",
+  "private": true,
+  "version": "0.1.1",
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "dev:web": "vite",
+    "dev:electron": "wait-on tcp:5173 && electron .",
+    "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:electron\"",
+    "build:web": "vue-tsc -b && vite build",
+    "build": "npm run build:web",
+    "preview": "vite preview",
+    "start": "electron .",
+    "dist": "npm run build && electron-builder -mwl"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "better-sqlite3": "^12.6.2",
+    "lucide-vue-next": "^0.577.0",
+    "serialport": "^13.0.0",
+    "ssh2": "^1.17.0",
+    "sshpk": "^1.18.0",
+    "uuid": "^13.0.0",
+    "vue": "^3.5.25"
+  },
+  "build": {
+    "appId": "ai.lightterm.desktop",
+    "productName": "LightTerm",
+    "directories": {
+      "output": "release"
+    },
+    "npmRebuild": false,
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@vitejs/plugin-vue": "^6.0.2",
+    "@vue/tsconfig": "^0.8.1",
+    "concurrently": "^9.2.1",
+    "electron": "^41.0.0",
+    "electron-builder": "^26.8.1",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.1",
+    "vue-tsc": "^3.1.5",
+    "wait-on": "^9.0.4"
+  }
+}

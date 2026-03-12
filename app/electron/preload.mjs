@@ -1,0 +1,49 @@
+import { contextBridge, ipcRenderer } from 'electron'
+
+contextBridge.exposeInMainWorld('lightterm', {
+  appGetStorage: () => ipcRenderer.invoke('app:get-storage'),
+  appPickStorageFolder: () => ipcRenderer.invoke('app:pick-storage-folder'),
+  appSetStorageFolder: (payload) => ipcRenderer.invoke('app:set-storage-folder', payload),
+
+  hostsList: () => ipcRenderer.invoke('hosts:list'),
+  hostsSave: (payload) => ipcRenderer.invoke('hosts:save', payload),
+  hostsDelete: (payload) => ipcRenderer.invoke('hosts:delete', payload),
+
+  vaultStatus: () => ipcRenderer.invoke('vault:status'),
+  vaultSetMaster: (payload) => ipcRenderer.invoke('vault:set-master', payload),
+  vaultUnlock: (payload) => ipcRenderer.invoke('vault:unlock', payload),
+  vaultReset: () => ipcRenderer.invoke('vault:reset'),
+  vaultKeyList: () => ipcRenderer.invoke('vault:key-list'),
+  vaultKeySave: (payload) => ipcRenderer.invoke('vault:key-save', payload),
+  vaultKeyGet: (payload) => ipcRenderer.invoke('vault:key-get', payload),
+  vaultKeyImportFile: () => ipcRenderer.invoke('vault:key-import-file'),
+
+  syncLogin: (payload) => ipcRenderer.invoke('sync:login', payload),
+  syncStatus: () => ipcRenderer.invoke('sync:status'),
+  syncQueue: () => ipcRenderer.invoke('sync:queue'),
+  syncClearQueue: () => ipcRenderer.invoke('sync:clear-queue'),
+  syncPushNow: () => ipcRenderer.invoke('sync:push-now'),
+
+  listSerialPorts: () => ipcRenderer.invoke('serial:list'),
+  openSerial: (options) => ipcRenderer.invoke('serial:open', options),
+  sendSerial: (payload) => ipcRenderer.invoke('serial:send', payload),
+  onSerialData: (handler) => ipcRenderer.on('serial:data', (_event, data) => handler(data)),
+
+  sshTest: (config) => ipcRenderer.invoke('ssh:test', config),
+  sshConnect: (config) => ipcRenderer.invoke('ssh:connect', config),
+  sshWrite: (payload) => ipcRenderer.invoke('ssh:write', payload),
+  sshResize: (payload) => ipcRenderer.invoke('ssh:resize', payload),
+  sshDisconnect: (payload) => ipcRenderer.invoke('ssh:disconnect', payload),
+  onSshData: (handler) => ipcRenderer.on('ssh:data', (_event, data) => handler(data)),
+  onSshClose: (handler) => ipcRenderer.on('ssh:close', (_event, data) => handler(data)),
+  onSshError: (handler) => ipcRenderer.on('ssh:error', (_event, data) => handler(data)),
+
+  onSftpProgress: (handler) => ipcRenderer.on('sftp:progress', (_event, data) => handler(data)),
+  localfsList: (payload) => ipcRenderer.invoke('localfs:list', payload),
+  sftpList: (payload) => ipcRenderer.invoke('sftp:list', payload),
+  sftpUpload: (payload) => ipcRenderer.invoke('sftp:upload', payload),
+  sftpDownload: (payload) => ipcRenderer.invoke('sftp:download', payload),
+  sftpMkdir: (payload) => ipcRenderer.invoke('sftp:mkdir', payload),
+  sftpRename: (payload) => ipcRenderer.invoke('sftp:rename', payload),
+  sftpDelete: (payload) => ipcRenderer.invoke('sftp:delete', payload),
+})
