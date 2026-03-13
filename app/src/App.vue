@@ -39,6 +39,9 @@ const newCategoryName = ref('')
 const newCategoryInputVisible = ref(false)
 
 const extraCategories = ref<string[]>([])
+type HostProbeState = 'unknown' | 'checking' | 'online' | 'offline'
+const hostProbeById = ref<Record<string, { state: HostProbeState; detail?: string }>>({})
+let hostProbeBatchId = 0
 
 const notify = (ok: boolean, message: string) => {
   if (ok) {
@@ -105,22 +108,15 @@ const renameCategoryInline = async (from: string) => {
   notify(true, `分类已重命名：${from} → ${to}`)
 }
 
-const groupedHosts = computed(() => {
+const filteredHosts = computed(() => {
   const keyword = hostKeyword.value.trim().toLowerCase()
-  const rows = hostItems.value.filter((h) => {
+  return hostItems.value.filter((h) => {
     const categoryName = h.category || DEFAULT_CATEGORY
     const inCategory = selectedCategory.value === ALL_CATEGORY || categoryName === selectedCategory.value
     if (!inCategory) return false
     if (!keyword) return true
     return [h.name, h.host, h.username, h.category].some((v) => String(v || '').toLowerCase().includes(keyword))
   })
-  const map = new Map<string, any[]>()
-  rows.forEach((h) => {
-    const cat = h.category || DEFAULT_CATEGORY
-    if (!map.has(cat)) map.set(cat, [])
-    map.get(cat)!.push(h)
-  })
-  return Array.from(map.entries()).map(([name, items]) => ({ name, items }))
 })
 
 const sftpPath = ref('.')
@@ -348,6 +344,12 @@ const terminalSnippetId = ref('')
 const storageDbPath = ref('')
 const storageFolderInput = ref('')
 const storageMsg = ref('')
+const startupGateVisible = ref(true)
+const startupGateMode = ref<'loading' | 'init' | 'unlock'>('loading')
+const startupGateBusy = ref(false)
+const startupGateError = ref('')
+const startupDbFolder = ref('')
+const startupMasterConfirm = ref('')
 
 const serialPorts = ref<any[]>([])
 const serialForm = ref<{ path: string; baudRate: number; dataBits: number; stopBits: number; parity: 'none' | 'even' | 'odd' }>({
@@ -795,6 +797,101 @@ const connectSSH = async (optionsOrEvent?: { keepNav?: boolean } | Event) => {
   }
 }
 
+const setHostProbeState = (hostId: string, state: HostProbeState, detail = '') => {
+  hostProbeById.value = {
+    ...hostProbeById.value,
+    [hostId]: { state, detail },
+  }
+}
+
+const hostProbeClass = (hostId: string) => hostProbeById.value[hostId]?.state || 'unknown'
+
+const hostProbeTitle = (h: any) => {
+  const probe = hostProbeById.value[h.id]
+  const statusText = probe?.state === 'online'
+    ? 'SSH 可连接'
+    : probe?.state === 'offline'
+      ? 'SSH 不可连接'
+      : probe?.state === 'checking'
+        ? 'SSH 检测中...'
+        : '等待检测'
+  return probe?.detail ? `${statusText}：${probe.detail}` : statusText
+}
+
+const syncHostProbeMap = () => {
+  const next: Record<string, { state: HostProbeState; detail?: string }> = {}
+  hostItems.value.forEach((h) => {
+    next[h.id] = hostProbeById.value[h.id] || { state: 'unknown' }
+  })
+  hostProbeById.value = next
+}
+
+const buildHostProbeConfig = async (h: any): Promise<{ ok: boolean; cfg?: LocalSSHConfig; error?: string }> => {
+  if ((h.auth_type || 'password') !== 'key') {
+    return {
+      ok: true,
+      cfg: {
+        host: h.host,
+        port: Number(h.port || 22),
+        username: h.username,
+        password: h.password || undefined,
+      },
+    }
+  }
+
+  if (!h.private_key_ref) {
+    return { ok: false, error: '未配置密钥引用' }
+  }
+  const keyRes = await window.lightterm.vaultKeyGet({ id: h.private_key_ref })
+  if (!keyRes.ok) {
+    return { ok: false, error: keyRes.error || '读取密钥失败' }
+  }
+  const privateKey = keyRes.item?.privateKey || ''
+  if (!privateKey) {
+    return { ok: false, error: '密钥内容为空' }
+  }
+  return {
+    ok: true,
+    cfg: {
+      host: h.host,
+      port: Number(h.port || 22),
+      username: h.username,
+      privateKey,
+    },
+  }
+}
+
+const testHostReachability = async (h: any, batchId = hostProbeBatchId) => {
+  if (!h?.id || batchId !== hostProbeBatchId) return
+  setHostProbeState(h.id, 'checking')
+  const built = await buildHostProbeConfig(h)
+  if (!built.ok || !built.cfg) {
+    setHostProbeState(h.id, 'offline', built.error || '配置不完整')
+    return
+  }
+  const res = await window.lightterm.sshTest(built.cfg)
+  if (batchId !== hostProbeBatchId) return
+  if (res.ok) {
+    setHostProbeState(h.id, 'online')
+  } else {
+    setHostProbeState(h.id, 'offline', res.error || '连接失败')
+  }
+}
+
+const probeAllHosts = async () => {
+  syncHostProbeMap()
+  const batchId = ++hostProbeBatchId
+  const queue = [...hostItems.value]
+  const workerCount = Math.min(4, queue.length)
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (queue.length > 0) {
+      const host = queue.shift()
+      if (!host) break
+      await testHostReachability(host, batchId)
+    }
+  }))
+}
+
 const refreshHosts = async () => {
   const res = await window.lightterm.hostsList()
   if (res.ok) {
@@ -802,6 +899,7 @@ const refreshHosts = async () => {
     if (!hostCategories.value.includes(selectedCategory.value) && selectedCategory.value !== ALL_CATEGORY) {
       selectedCategory.value = ALL_CATEGORY
     }
+    void probeAllHosts()
   }
 }
 const saveCurrentHost = async () => {
@@ -849,7 +947,7 @@ const openHostEditor = (h: any) => {
 }
 
 const openHostTerminal = async (h: any) => {
-  openHostEditor(h)
+  useHost(h)
   await connectSSH()
 }
 const saveEditedHost = async () => {
@@ -1362,6 +1460,106 @@ const deleteSftp = async () => {
   }
 }
 
+const plainVaultMessage = (msg: string) => String(msg || '').replace(/^[✅❌]\s*/, '').trim()
+const dbFolderFromPath = (dbPath: string) => String(dbPath || '').replace(/[\\/]lightterm\.db$/i, '')
+
+const ensureStartupDbFolder = () => {
+  if (startupDbFolder.value) return
+  const currentFolder = dbFolderFromPath(storageDbPath.value)
+  if (currentFolder) startupDbFolder.value = currentFolder
+}
+
+const evaluateVaultGate = () => {
+  if (!vaultInitialized.value) {
+    startupGateMode.value = 'init'
+    startupGateVisible.value = true
+    ensureStartupDbFolder()
+    return
+  }
+  if (!vaultUnlocked.value) {
+    startupGateMode.value = 'unlock'
+    startupGateVisible.value = true
+    return
+  }
+  startupGateVisible.value = false
+  startupGateError.value = ''
+  startupMasterConfirm.value = ''
+}
+
+const pickStartupDbFolder = async () => {
+  const res = await window.lightterm.appPickStorageFolder()
+  if (res.ok && res.folder) {
+    startupDbFolder.value = res.folder
+    startupGateError.value = ''
+  }
+}
+
+const useCurrentDbFolder = () => {
+  startupDbFolder.value = dbFolderFromPath(storageDbPath.value)
+  startupGateError.value = ''
+}
+
+const runStartupInit = async () => {
+  if (startupGateBusy.value) return
+  if (!startupDbFolder.value.trim()) {
+    startupGateError.value = '请先选择数据库目录'
+    return
+  }
+  if (!vaultMaster.value) {
+    startupGateError.value = '请设置主密码'
+    return
+  }
+  if (vaultMaster.value !== startupMasterConfirm.value) {
+    startupGateError.value = '两次输入的主密码不一致'
+    return
+  }
+  startupGateBusy.value = true
+  startupGateError.value = ''
+  try {
+    const targetFolder = startupDbFolder.value.trim()
+    const currentFolder = dbFolderFromPath(storageDbPath.value)
+    if (targetFolder && targetFolder !== currentFolder) {
+      const setRes = await window.lightterm.appSetStorageFolder({ folder: targetFolder })
+      if (!setRes.ok) {
+        startupGateError.value = `数据库目录设置失败：${setRes.error || '未知错误'}`
+        return
+      }
+      startupGateError.value = '数据库目录已设置，应用正在重启...'
+      await window.lightterm.appRestart()
+      return
+    }
+
+    await initVault()
+    if (!vaultUnlocked.value) {
+      startupGateError.value = plainVaultMessage(vaultStatus.value) || '初始化失败'
+      return
+    }
+    startupGateVisible.value = false
+  } finally {
+    startupGateBusy.value = false
+  }
+}
+
+const runStartupUnlock = async () => {
+  if (startupGateBusy.value) return
+  if (!vaultMaster.value) {
+    startupGateError.value = '请输入主密码'
+    return
+  }
+  startupGateBusy.value = true
+  startupGateError.value = ''
+  try {
+    await unlockVault()
+    if (!vaultUnlocked.value) {
+      startupGateError.value = plainVaultMessage(vaultStatus.value) || '解锁失败'
+      return
+    }
+    startupGateVisible.value = false
+  } finally {
+    startupGateBusy.value = false
+  }
+}
+
 const checkVault = async () => {
   if (!window.lightterm?.vaultStatus) {
     bridgeReady.value = false
@@ -1372,6 +1570,7 @@ const checkVault = async () => {
   const res = await window.lightterm.vaultStatus()
   vaultInitialized.value = res.initialized
   vaultUnlocked.value = res.unlocked
+  evaluateVaultGate()
 }
 const initVault = async () => {
   try {
@@ -1590,6 +1789,7 @@ const refreshStorageInfo = async () => {
   const res = await window.lightterm.appGetStorage()
   if (res.ok) {
     storageDbPath.value = res.dbPath || ''
+    ensureStartupDbFolder()
   }
 }
 
@@ -1635,6 +1835,9 @@ const toggleTimerSend = () => {
 }
 
 onMounted(async () => {
+  startupGateVisible.value = true
+  startupGateMode.value = 'loading'
+  startupGateError.value = ''
   restoreSshTabs()
   restoreSnippets()
   initTerminal()
@@ -1667,8 +1870,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="layout" :class="{ 'terminal-layout': focusTerminal }">
     <aside class="sidebar">
-      <div class="brand"><img src="/logo-astrashell.svg" alt="AstraShell" class="brand-logo" /> AstraShell</div>
-      <ul>
+      <div class="brand"><img src="/logo-astrashell.png?v=2" alt="AstraShell" class="brand-logo" /> AstraShell</div>
+      <ul class="sidebar-nav">
         <li :class="{ active: nav === 'hosts' }" @click="focusTerminal = false; nav = 'hosts'"><Server :size="16" /> 主机</li>
         <li :class="{ active: nav === 'sftp' }" @click="focusTerminal = false; nav = 'sftp'"><FolderTree :size="16" /> SFTP</li>
         <li :class="{ active: nav === 'snippets' }" @click="focusTerminal = false; nav = 'snippets'"><Pencil :size="16" /> 代码片段</li>
@@ -1676,6 +1879,13 @@ onBeforeUnmount(() => {
         <li :class="{ active: nav === 'vault' }" @click="focusTerminal = false; nav = 'vault'"><KeyRound :size="16" /> 密钥仓库</li>
         <li :class="{ active: nav === 'settings' }" @click="focusTerminal = false; nav = 'settings'"><Settings :size="16" /> 设置</li>
       </ul>
+      <div class="sidebar-footer">
+        <img src="/logo-astrashell.png?v=2" alt="AstraShell Logo" class="sidebar-footer-logo" />
+        <div class="sidebar-footer-text">
+          <div class="sidebar-footer-title">AstraShell</div>
+          <div class="sidebar-footer-sub">制作人：GetIDC</div>
+        </div>
+      </div>
     </aside>
 
     <main class="main">
@@ -1734,41 +1944,35 @@ onBeforeUnmount(() => {
           <div class="hosts-center">
             <div class="hosts-toolbar">
               <input v-model="hostKeyword" placeholder="搜索主机 / IP / 用户名" />
-              <span class="hosts-stat">共 {{ hostItems.length }} 台主机</span>
-            </div>
-            <div class="hosts-groups">
-              <div v-for="group in groupedHosts" :key="group.name" class="group-card">
-                <div>
-                  <div class="group-title">{{ group.name }}</div>
-                  <div class="group-subtitle">{{ group.items.length }} 主机</div>
-                </div>
-                <button class="ghost tiny" @click="hostEditorVisible = true">查看</button>
-              </div>
+              <span class="hosts-stat">显示 {{ filteredHosts.length }} / {{ hostItems.length }} 台主机</span>
             </div>
             <div class="host-grid">
-              <template v-for="group in groupedHosts" :key="group.name">
-                <div
-                  class="host-card"
-                  v-for="h in group.items"
-                  :key="h.id"
-                  @click="openHostEditor(h); hostEditorVisible = true"
-                  @dblclick="openHostTerminal(h)"
-                  :class="{ activeHost: selectedHostId === h.id }"
-                >
-                  <div class="host-card-main">
-                    <span class="host-icon">{{ h.auth_type === 'key' ? '🔑' : '🖥' }}</span>
-                    <div class="host-card-body">
-                      <div class="host-card-title">{{ h.name }}</div>
-                      <div class="host-line">{{ h.host }} · {{ h.username }}</div>
-                    </div>
-                  </div>
-                  <div class="host-card-meta">
-                    <span class="pill">{{ h.category || DEFAULT_CATEGORY }}</span>
-                    <span class="pill ghost">{{ h.auth_type === 'key' ? '密钥' : '密码' }}</span>
-                    <span class="status-dot" :class="{ online: h.connected, offline: !h.connected }"></span>
+              <div
+                class="host-card"
+                v-for="h in filteredHosts"
+                :key="h.id"
+                @click="useHost(h)"
+                @dblclick="openHostTerminal(h)"
+                :class="{ activeHost: selectedHostId === h.id }"
+              >
+                <div class="host-card-main">
+                  <span class="host-icon">{{ h.auth_type === 'key' ? '🔑' : '🖥' }}</span>
+                  <div class="host-card-body">
+                    <div class="host-card-title">{{ h.name }}</div>
+                    <div class="host-line">{{ h.host }} · {{ h.username }}</div>
                   </div>
                 </div>
-              </template>
+                <div class="host-card-meta">
+                  <span class="pill ghost">{{ h.auth_type === 'key' ? '密钥' : '密码' }}</span>
+                  <button class="status-dot-btn" :title="hostProbeTitle(h)" @click.stop="testHostReachability(h)">
+                    <span class="status-dot" :class="hostProbeClass(h.id)"></span>
+                  </button>
+                  <button class="host-edit-btn" title="编辑主机" @click.stop="openHostEditor(h)">
+                    <Pencil :size="12" />
+                  </button>
+                </div>
+              </div>
+              <div v-if="filteredHosts.length === 0" class="file-row empty">暂无主机</div>
             </div>
           </div>
 
@@ -2190,18 +2394,54 @@ onBeforeUnmount(() => {
         <div class="mini-bar"><div class="mini-fill down" :style="{ width: `${sftpDownloadProgress}%` }"></div></div>
       </div>
     </footer>
+
+    <div v-if="startupGateVisible" class="startup-overlay">
+      <div class="startup-card">
+        <h3 v-if="startupGateMode === 'loading'">正在检查密钥仓库...</h3>
+        <template v-else-if="startupGateMode === 'init'">
+          <h3>首次启动：初始化数据库与密钥仓库</h3>
+          <p>请先确定数据库目录，然后设置主密码完成初始化。</p>
+          <div class="grid startup-db-grid">
+            <input v-model="startupDbFolder" placeholder="数据库目录（将创建 lightterm.db）" />
+            <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbFolder">选择目录</button>
+            <button class="ghost" :disabled="startupGateBusy" @click="useCurrentDbFolder">使用当前目录</button>
+          </div>
+          <p class="hint">当前数据库：{{ storageDbPath || '读取中...' }}</p>
+          <div class="grid startup-auth-grid">
+            <input v-model="vaultMaster" type="password" placeholder="设置主密码" />
+            <input v-model="startupMasterConfirm" type="password" placeholder="确认主密码" />
+          </div>
+          <button :disabled="startupGateBusy" @click="runStartupInit">创建并初始化</button>
+        </template>
+        <template v-else>
+          <h3>解锁密钥仓库</h3>
+          <p>进入软件前请先输入主密码。</p>
+          <p class="hint">当前数据库：{{ storageDbPath || '读取中...' }}</p>
+          <div class="grid startup-auth-grid">
+            <input v-model="vaultMaster" type="password" placeholder="输入主密码" @keyup.enter="runStartupUnlock" />
+            <button :disabled="startupGateBusy" @click="runStartupUnlock">解锁并进入</button>
+          </div>
+        </template>
+        <p class="vault-status">{{ startupGateError || plainVaultMessage(vaultStatus) || '就绪' }}</p>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .layout { display: grid; grid-template-columns: 220px 1fr; height: 100vh; padding-top: 0; }
-.sidebar { background: linear-gradient(180deg, #eef2f7 0%, #e9edf3 100%); border-right: 1px solid var(--border); padding: 8px 16px 16px; }
-.brand { font-weight: 800; margin-bottom: 14px; font-size: 18px; display: flex; align-items: center; gap: 8px; }
-.brand-logo { width: 20px; height: 20px; border-radius: 5px; }
+.sidebar { background: linear-gradient(180deg, #eef2f7 0%, #e9edf3 100%); border-right: 1px solid var(--border); padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.brand { font-weight: 800; margin-bottom: 6px; font-size: 20px; display: flex; align-items: center; gap: 10px; }
+.brand-logo { width: 52px; height: 52px; border-radius: 0; object-fit: contain; }
 .sidebar ul { list-style: none; padding: 0; margin: 0; }
+.sidebar-nav { flex: 1; min-height: 0; overflow: auto; }
 .sidebar li { padding: 10px 10px; border-radius: 10px; color: var(--text-main); cursor: pointer; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
 .sidebar li:hover { background: #dfe5ee; }
 .sidebar li.active { background: #dbeafe; color: #1d4ed8; font-weight: 600; }
+.sidebar-footer { border: 1px solid #d4dde8; border-radius: 12px; background: #f7fafd; padding: 10px; display: flex; align-items: center; gap: 10px; }
+.sidebar-footer-logo { width: 34px; height: 34px; border-radius: 0; object-fit: contain; flex-shrink: 0; }
+.sidebar-footer-title { font-size: 13px; font-weight: 700; color: #0f172a; }
+.sidebar-footer-sub { font-size: 11px; color: #64748b; }
 .main { padding: 12px; padding-bottom: 42px; display: flex; flex-direction: column; gap: 10px; height: 100vh; overflow: hidden; }
 .top-actions { flex-shrink: 0; }
 .terminal-top-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #f5f8fc; border: 1px solid #dbe3ee; border-radius: 12px; padding: 8px 10px; }
@@ -2290,10 +2530,6 @@ h4 { margin: 4px 0; font-size: 12px; font-weight: 600; }
 .hosts-toolbar { display: flex; align-items: center; gap: 10px; }
 .hosts-toolbar input { flex: 1; min-width: 0; background: #f7fbff; }
 .hosts-stat { font-size: 12px; color: #475569; white-space: nowrap; }
-.hosts-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
-.group-card { background: #f8fbff; border-radius: 12px; padding: 10px 12px; border: 1px solid #d8e2ec; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.group-title { font-size: 13px; font-weight: 700; color: #0f172a; }
-.group-subtitle { font-size: 11px; color: #64748b; margin-top: 2px; }
 .host-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; overflow: auto; flex: 1; min-height: 0; align-content: start; }
 .host-card { background: #f8fafc; border: 1px solid #d4dce6; border-radius: 12px; padding: 9px 10px; cursor: pointer; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .host-card:hover { border-color: #9bbcff; background: #f5f9ff; }
@@ -2306,9 +2542,19 @@ h4 { margin: 4px 0; font-size: 12px; font-weight: 600; }
 .host-card-meta { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .pill { border-radius: 999px; padding: 2px 8px; font-size: 11px; background: #e8edf3; color: #334155; border: 1px solid #d7dee8; }
 .pill.ghost { background: #f6f8fb; }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #ef4444; }
-.status-dot.online { background: #22c55e; }
-.status-dot.offline { background: #ef4444; }
+.status-dot-btn,
+.host-edit-btn { width: 26px; height: 26px; border: 1px solid #d5dde8; border-radius: 8px; background: #f8fbff; color: #475569; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.status-dot-btn:hover,
+.host-edit-btn:hover { background: #eef5ff; border-color: #93c5fd; color: #1d4ed8; }
+.status-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: #94a3b8; }
+.status-dot.online { background: #22c55e; box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.18); }
+.status-dot.offline { background: #ef4444; box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.16); }
+.status-dot.unknown { background: #94a3b8; }
+.status-dot.checking { background: #3b82f6; animation: host-ping 1s ease-in-out infinite; }
+@keyframes host-ping {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.25); opacity: 0.7; }
+}
 .hosts-editor-column { width: 0; min-width: 0; overflow: hidden; transition: width 0.2s ease; }
 .hosts-editor-column.visible { width: 340px; min-width: 340px; }
 .host-editor-panel { background: #f2f6fb; border-radius: 12px; padding: 12px; border: 1px solid #c5d1dc; height: 100%; overflow: auto; }
@@ -2416,6 +2662,12 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
   color: #111827;
   margin: 2px 0;
 }
+.startup-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(15, 23, 42, 0.46); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.startup-card { width: min(560px, 94vw); background: #f8fbff; border: 1px solid #cbd5e1; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 18px 50px rgba(15, 23, 42, 0.25); }
+.startup-card h3 { margin: 0; color: #0f172a; font-size: 18px; }
+.startup-card p { margin: 0; color: #334155; font-size: 13px; }
+.startup-db-grid { grid-template-columns: minmax(0, 1fr) auto auto; }
+.startup-auth-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 @media (max-width: 1500px) {
   .hosts-layout.new-layout { grid-template-columns: 176px minmax(0, 1fr) auto; }
   .hosts-editor-column.visible { width: 320px; min-width: 320px; }
@@ -2423,7 +2675,6 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
 @media (max-width: 1280px) {
   .hosts-layout.new-layout { grid-template-columns: 170px minmax(0, 1fr); }
   .hosts-editor-column { display: none; }
-  .hosts-groups { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
   .host-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
   .snippets-layout { grid-template-columns: 160px minmax(0, 1fr); }
   .snippets-editor-column { display: none; }
@@ -2447,6 +2698,8 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
   .snippets-header { flex-direction: column; align-items: flex-start; }
   .snippets-run-settings input { width: 100%; }
   .vault-toolbar { grid-template-columns: 1fr 1fr; }
+  .startup-db-grid,
+  .startup-auth-grid { grid-template-columns: 1fr; }
 }
 
 .hint { color: #6b7280; font-size: 12px; }

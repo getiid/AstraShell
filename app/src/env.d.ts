@@ -8,6 +8,7 @@ declare global {
       appGetStorage: () => Promise<{ ok: boolean; dbPath?: string }>
       appPickStorageFolder: () => Promise<{ ok: boolean; folder?: string; error?: string }>
       appSetStorageFolder: (payload: { folder: string }) => Promise<{ ok: boolean; dbPath?: string; restartRequired?: boolean; error?: string }>
+      appRestart: () => Promise<{ ok: boolean; error?: string }>
       clipboardRead: () => Promise<{ ok: boolean; text?: string; error?: string }>
       clipboardWrite: (payload: { text: string }) => Promise<{ ok: boolean; error?: string }>
       updateGetState: () => Promise<{ ok: boolean; status?: string; message?: string; currentVersion?: string; latestVersion?: string; hasUpdate?: boolean; downloaded?: boolean; checking?: boolean; downloading?: boolean; progress?: number; error?: string }>

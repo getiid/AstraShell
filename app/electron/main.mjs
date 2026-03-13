@@ -615,6 +615,14 @@ ipcMain.handle('app:set-storage-folder', async (_event, payload) => {
   return { ok: true, dbPath: nextDbPath, restartRequired: true }
 })
 
+ipcMain.handle('app:restart', async () => {
+  setImmediate(() => {
+    app.relaunch()
+    app.exit(0)
+  })
+  return { ok: true }
+})
+
 ipcMain.handle('clipboard:read', async () => {
   try {
     return { ok: true, text: clipboard.readText() }
