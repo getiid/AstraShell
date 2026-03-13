@@ -1,10 +1,10 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import os from 'node:os'
 import crypto from 'node:crypto'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { v4 as uuidv4 } from 'uuid'
 import { Client as SSHClient } from 'ssh2'
 import sshpk from 'sshpk'
@@ -27,6 +27,10 @@ let serialModuleLoadError = ''
 const { autoUpdater } = electronUpdater
 let updaterInitialized = false
 const macManualInstallTip = '当前构建未使用 Developer ID 签名，无法一键安装更新。请从 GitHub Release 下载 DMG 手动覆盖安装。'
+const giteeMirror = {
+  apiLatest: 'https://gitee.com/api/v5/repos/jitu/AstraShell/releases/latest',
+  releasePage: 'https://gitee.com/jitu/AstraShell/releases',
+}
 
 function checkMacAutoInstallSupport() {
   if (process.platform !== 'darwin' || isDev) return { supported: true, reason: '' }
@@ -59,6 +63,11 @@ const updateState = {
   checking: false,
   downloading: false,
   progress: 0,
+  source: 'github',
+  mirrorTag: '',
+  mirrorDownloadUrl: '',
+  mirrorReleaseUrl: '',
+  mirrorDownloadedFilePath: '',
 }
 
 function getSettingsPath() {
@@ -390,6 +399,190 @@ function setUpdateState(patch) {
   broadcastUpdateState()
 }
 
+function normalizeVersion(versionLike) {
+  return String(versionLike || '').trim().replace(/^v/i, '').split('-')[0]
+}
+
+function compareVersions(a, b) {
+  const pa = normalizeVersion(a).split('.').map((n) => Number.parseInt(n, 10) || 0)
+  const pb = normalizeVersion(b).split('.').map((n) => Number.parseInt(n, 10) || 0)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i += 1) {
+    const ai = pa[i] || 0
+    const bi = pb[i] || 0
+    if (ai > bi) return 1
+    if (ai < bi) return -1
+  }
+  return 0
+}
+
+function pickMirrorAsset(assets, latestVersion) {
+  if (!Array.isArray(assets) || assets.length === 0) return null
+  const version = normalizeVersion(latestVersion)
+  const rows = assets.map((asset) => {
+    const name = String(asset?.name || '').trim()
+    const url = String(asset?.browser_download_url || asset?.download_url || '').trim()
+    return { name, url }
+  }).filter((row) => row.name && row.url)
+
+  if (rows.length === 0) return null
+  const lowerRows = rows.map((row) => ({ ...row, lower: row.name.toLowerCase() }))
+
+  if (process.platform === 'win32') {
+    const exact = lowerRows.find((row) => row.lower === `astrashell-setup-${version}.exe`)
+    if (exact) return exact
+    const fuzzy = lowerRows.find((row) => row.lower.endsWith('.exe') && !row.lower.endsWith('.blockmap'))
+    return fuzzy || null
+  }
+
+  if (process.platform === 'darwin') {
+    const exact = lowerRows.find((row) => row.lower === `astrashell-${version}-arm64.dmg`)
+    if (exact) return exact
+    const fuzzy = lowerRows.find((row) => row.lower.endsWith('.dmg'))
+    return fuzzy || null
+  }
+
+  const appImage = lowerRows.find((row) => row.lower.endsWith('.appimage'))
+  return appImage || null
+}
+
+async function checkGiteeMirrorForUpdates() {
+  const response = await fetch(giteeMirror.apiLatest)
+  if (!response.ok) {
+    throw new Error(`镜像源不可用（HTTP ${response.status}）`)
+  }
+  const release = await response.json()
+  const tag = String(release?.tag_name || '')
+  if (!tag) {
+    throw new Error('镜像源未返回有效版本标签')
+  }
+  const latestVersion = normalizeVersion(tag)
+  const currentVersion = normalizeVersion(app.getVersion())
+  const hasUpdate = compareVersions(latestVersion, currentVersion) > 0
+  if (!hasUpdate) {
+    setUpdateState({
+      status: 'idle',
+      message: `当前已是最新版本（${currentVersion}）`,
+      latestVersion: currentVersion,
+      hasUpdate: false,
+      downloaded: false,
+      checking: false,
+      downloading: false,
+      progress: 0,
+      source: 'gitee',
+      mirrorTag: tag,
+      mirrorDownloadUrl: '',
+      mirrorReleaseUrl: giteeMirror.releasePage,
+      mirrorDownloadedFilePath: '',
+    })
+    return { ok: true, hasUpdate: false }
+  }
+
+  const asset = pickMirrorAsset(release?.assets || [], latestVersion)
+  if (!asset) {
+    throw new Error('镜像源未找到当前平台安装包')
+  }
+
+  setUpdateState({
+    status: 'available',
+    message: `发现新版本：${latestVersion}（镜像源 Gitee）`,
+    latestVersion,
+    hasUpdate: true,
+    downloaded: false,
+    checking: false,
+    downloading: false,
+    progress: 0,
+    source: 'gitee',
+    mirrorTag: tag,
+    mirrorDownloadUrl: asset.url,
+    mirrorReleaseUrl: giteeMirror.releasePage,
+    mirrorDownloadedFilePath: '',
+  })
+  return { ok: true, hasUpdate: true }
+}
+
+async function downloadFileFromUrl(url, outputPath, onProgress) {
+  const response = await fetch(url, { redirect: 'follow' })
+  if (!response.ok || !response.body) {
+    throw new Error(`下载失败（HTTP ${response.status}）`)
+  }
+  const total = Number(response.headers.get('content-length') || 0)
+  const file = fs.createWriteStream(outputPath)
+  const reader = response.body.getReader()
+  let received = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value) {
+      const chunk = Buffer.from(value)
+      file.write(chunk)
+      received += chunk.length
+      if (total > 0 && onProgress) {
+        onProgress(Math.min(100, (received / total) * 100))
+      }
+    }
+  }
+  await new Promise((resolve, reject) => {
+    file.end(() => resolve(true))
+    file.on('error', reject)
+  })
+}
+
+async function downloadMirrorUpdatePackage() {
+  const downloadUrl = String(updateState.mirrorDownloadUrl || '')
+  if (!downloadUrl) {
+    throw new Error('镜像更新地址为空')
+  }
+  const fileName = path.basename(new URL(downloadUrl).pathname) || `AstraShell-${updateState.latestVersion}.bin`
+  const dir = path.join(app.getPath('userData'), 'updates')
+  fs.mkdirSync(dir, { recursive: true })
+  const outPath = path.join(dir, fileName)
+  setUpdateState({
+    status: 'downloading',
+    message: '镜像源下载中：0%',
+    downloading: true,
+    downloaded: false,
+    progress: 0,
+  })
+  await downloadFileFromUrl(downloadUrl, outPath, (percent) => {
+    setUpdateState({
+      status: 'downloading',
+      message: `镜像源下载中：${Math.round(percent)}%`,
+      downloading: true,
+      progress: Number(percent),
+    })
+  })
+  setUpdateState({
+    status: 'downloaded',
+    message: `镜像包下载完成：${fileName}，可执行安装`,
+    downloaded: true,
+    downloading: false,
+    progress: 100,
+    mirrorDownloadedFilePath: outPath,
+  })
+  return outPath
+}
+
+async function installMirrorUpdatePackage() {
+  const filePath = String(updateState.mirrorDownloadedFilePath || '')
+  if (!filePath || !fs.existsSync(filePath)) {
+    throw new Error('镜像安装包不存在，请先下载')
+  }
+  if (process.platform === 'win32') {
+    const child = spawn(filePath, [], { detached: true, stdio: 'ignore' })
+    child.unref()
+    setTimeout(() => app.quit(), 200)
+    return
+  }
+  if (process.platform === 'darwin') {
+    const child = spawn('open', [filePath], { detached: true, stdio: 'ignore' })
+    child.unref()
+    return
+  }
+  const openErr = await shell.openPath(filePath)
+  if (openErr) throw new Error(openErr)
+}
+
 async function checkForUpdatesNow() {
   if (isDev) return { ok: false, error: '开发模式不支持自动更新检查' }
   initAutoUpdater()
@@ -397,14 +590,26 @@ async function checkForUpdatesNow() {
     await autoUpdater.checkForUpdates()
     return { ok: true }
   } catch (e) {
-    const message = normalizeUpdateError(e)
-    setUpdateState({
-      status: 'error',
-      message: `检查更新失败：${message}`,
-      checking: false,
-    })
-    logMain(`update check error: ${message}`)
-    return { ok: false, error: message }
+    const githubMessage = normalizeUpdateError(e)
+    logMain(`update check github error: ${githubMessage}`)
+    try {
+      const mirrorResult = await checkGiteeMirrorForUpdates()
+      if (mirrorResult.ok) {
+        return { ok: true, source: 'gitee', hasUpdate: !!mirrorResult.hasUpdate }
+      }
+    } catch (mirrorErr) {
+      const mirrorMessage = normalizeUpdateError(mirrorErr)
+      const merged = `GitHub：${githubMessage}；Gitee：${mirrorMessage}`
+      setUpdateState({
+        status: 'error',
+        message: `检查更新失败：${merged}`,
+        checking: false,
+        source: 'github',
+      })
+      logMain(`update check gitee error: ${mirrorMessage}`)
+      return { ok: false, error: merged }
+    }
+    return { ok: true, source: 'gitee', hasUpdate: !!updateState.hasUpdate }
   }
 }
 
@@ -421,6 +626,10 @@ function initAutoUpdater() {
       checking: true,
       downloading: false,
       progress: 0,
+      source: 'github',
+      mirrorDownloadUrl: '',
+      mirrorReleaseUrl: '',
+      mirrorDownloadedFilePath: '',
     })
   })
 
@@ -437,6 +646,11 @@ function initAutoUpdater() {
       checking: false,
       downloading: false,
       progress: 0,
+      source: 'github',
+      mirrorTag: '',
+      mirrorDownloadUrl: '',
+      mirrorReleaseUrl: '',
+      mirrorDownloadedFilePath: '',
     })
   })
 
@@ -450,6 +664,11 @@ function initAutoUpdater() {
       checking: false,
       downloading: false,
       progress: 0,
+      source: 'github',
+      mirrorTag: '',
+      mirrorDownloadUrl: '',
+      mirrorReleaseUrl: '',
+      mirrorDownloadedFilePath: '',
     })
   })
 
@@ -472,6 +691,8 @@ function initAutoUpdater() {
       checking: false,
       downloading: false,
       progress: 100,
+      source: 'github',
+      mirrorDownloadedFilePath: '',
     })
   })
 
@@ -482,6 +703,7 @@ function initAutoUpdater() {
       message: `更新异常：${message}`,
       checking: false,
       downloading: false,
+      source: 'github',
     })
     logMain(`autoUpdater error: ${message}`)
   })
@@ -661,6 +883,16 @@ ipcMain.handle('update:check', async () => {
 
 ipcMain.handle('update:download', async () => {
   if (isDev) return { ok: false, error: '开发模式不支持下载更新' }
+  if (updateState.source === 'gitee') {
+    try {
+      await downloadMirrorUpdatePackage()
+      return { ok: true }
+    } catch (e) {
+      const message = normalizeUpdateError(e)
+      setUpdateState({ status: 'error', message: `镜像下载失败：${message}`, downloading: false })
+      return { ok: false, error: message }
+    }
+  }
   if (process.platform === 'darwin' && !macAutoInstallSupport.supported) {
     return { ok: false, error: macManualInstallTip }
   }
@@ -677,6 +909,16 @@ ipcMain.handle('update:download', async () => {
 
 ipcMain.handle('update:install', async () => {
   if (isDev) return { ok: false, error: '开发模式不支持安装更新' }
+  if (updateState.source === 'gitee') {
+    try {
+      await installMirrorUpdatePackage()
+      return { ok: true }
+    } catch (e) {
+      const message = normalizeUpdateError(e)
+      setUpdateState({ status: 'error', message: `镜像安装失败：${message}` })
+      return { ok: false, error: message }
+    }
+  }
   if (process.platform === 'darwin' && !macAutoInstallSupport.supported) {
     return { ok: false, error: macManualInstallTip }
   }

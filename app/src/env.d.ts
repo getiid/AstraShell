@@ -11,11 +11,11 @@ declare global {
       appRestart: () => Promise<{ ok: boolean; error?: string }>
       clipboardRead: () => Promise<{ ok: boolean; text?: string; error?: string }>
       clipboardWrite: (payload: { text: string }) => Promise<{ ok: boolean; error?: string }>
-      updateGetState: () => Promise<{ ok: boolean; status?: string; message?: string; currentVersion?: string; latestVersion?: string; hasUpdate?: boolean; downloaded?: boolean; checking?: boolean; downloading?: boolean; progress?: number; error?: string }>
+      updateGetState: () => Promise<{ ok: boolean; status?: string; message?: string; currentVersion?: string; latestVersion?: string; source?: string; hasUpdate?: boolean; downloaded?: boolean; checking?: boolean; downloading?: boolean; progress?: number; error?: string }>
       updateCheck: () => Promise<{ ok: boolean; error?: string }>
       updateDownload: () => Promise<{ ok: boolean; error?: string }>
       updateInstall: () => Promise<{ ok: boolean; error?: string }>
-      onUpdateStatus: (handler: (data: { status?: string; message?: string; currentVersion?: string; latestVersion?: string; hasUpdate?: boolean; downloaded?: boolean; checking?: boolean; downloading?: boolean; progress?: number }) => void) => void
+      onUpdateStatus: (handler: (data: { status?: string; message?: string; currentVersion?: string; latestVersion?: string; source?: string; hasUpdate?: boolean; downloaded?: boolean; checking?: boolean; downloading?: boolean; progress?: number }) => void) => void
 
       hostsList: () => Promise<{ ok: boolean; items?: any[] }>
       hostsSave: (payload: any) => Promise<{ ok: boolean; id?: string; error?: string }>

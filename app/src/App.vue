@@ -305,6 +305,7 @@ const updateInfo = ref({
   message: '等待检查更新',
   currentVersion: '',
   latestVersion: '',
+  source: 'github',
   hasUpdate: false,
   downloaded: false,
   checking: false,
@@ -317,6 +318,7 @@ type UpdateStatePayload = Partial<{
   message: string
   currentVersion: string
   latestVersion: string
+  source: string
   hasUpdate: boolean
   downloaded: boolean
   checking: boolean
@@ -330,7 +332,8 @@ const updateStatusText = computed(() => {
   const u = updateInfo.value
   const current = u.currentVersion || '-'
   const latest = u.latestVersion || '-'
-  return `当前版本：${current} ｜ 最新版本：${latest} ｜ ${u.message || '就绪'}`
+  const sourceLabel = u.source === 'gitee' ? 'Gitee' : 'GitHub'
+  return `当前版本：${current} ｜ 最新版本：${latest} ｜ 更新源：${sourceLabel} ｜ ${u.message || '就绪'}`
 })
 
 type SnippetItem = {
@@ -1795,6 +1798,7 @@ const mergeUpdateState = (payload: UpdateStatePayload = {}) => {
     message: payload.message ?? prev.message,
     currentVersion: payload.currentVersion ?? prev.currentVersion,
     latestVersion: payload.latestVersion ?? prev.latestVersion,
+    source: payload.source ?? prev.source,
     hasUpdate: payload.hasUpdate ?? prev.hasUpdate,
     downloaded: payload.downloaded ?? prev.downloaded,
     checking: payload.checking ?? prev.checking,

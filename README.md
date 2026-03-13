@@ -110,3 +110,14 @@ AstraShell/
 
 - 仓库：<https://github.com/getiid/AstraShell>
 - 桌面端安装包：GitHub Releases 附件（`.dmg` / `.exe`）
+
+## 更新源策略（GitHub + Gitee）
+
+- 客户端检查更新顺序：`GitHub -> Gitee`（GitHub 不通时自动回退）
+- 若要让 Gitee 也可自动更新，需在 Gitee Release 同步上传：
+  - `AstraShell-Setup-x.y.z.exe`
+  - `AstraShell-Setup-x.y.z.exe.blockmap`
+  - `AstraShell-x.y.z-arm64.dmg`
+  - `AstraShell-x.y.z-arm64-mac.zip`
+  - `latest.yml`
+  - `latest-mac.yml`
