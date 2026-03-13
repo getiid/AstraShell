@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('lightterm', {
   appPickStorageFolder: () => ipcRenderer.invoke('app:pick-storage-folder'),
   appSetStorageFolder: (payload) => ipcRenderer.invoke('app:set-storage-folder', payload),
   appRestart: () => ipcRenderer.invoke('app:restart'),
+  appOpenExternal: (payload) => ipcRenderer.invoke('app:open-external', payload),
   clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
   clipboardWrite: (payload) => ipcRenderer.invoke('clipboard:write', payload),
   updateGetState: () => ipcRenderer.invoke('update:get-state'),

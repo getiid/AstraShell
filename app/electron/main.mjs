@@ -27,6 +27,9 @@ let serialModuleLoadError = ''
 const { autoUpdater } = electronUpdater
 let updaterInitialized = false
 let activeUpdateProvider = 'github'
+let runtimeCleanupPromise = null
+let runtimeCleanupReason = ''
+let suppressWindowAllClosedQuit = false
 const macManualInstallTip = '当前构建未使用 Developer ID 签名，无法一键安装更新。请从 GitHub Release 下载 DMG 手动覆盖安装。'
 const githubReleaseProvider = {
   provider: 'github',
@@ -71,6 +74,8 @@ const updateState = {
   downloading: false,
   progress: 0,
   source: 'github',
+  downloadUrl: '',
+  releaseUrl: '',
   mirrorTag: '',
   mirrorDownloadUrl: '',
   mirrorReleaseUrl: '',
@@ -464,6 +469,137 @@ function logMain(message) {
   } catch {}
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function closeAllSshSessions(reason = 'app-exit') {
+  const entries = [...sshSessions.entries()]
+  if (!entries.length) return
+  logMain(`ssh cleanup start reason=${reason} count=${entries.length}`)
+  sshSessions.clear()
+  await Promise.allSettled(entries.map(async ([sessionId, session]) => {
+    try {
+      session?.stream?.end?.('exit\n')
+    } catch (e) {
+      logMain(`ssh cleanup stream end failed reason=${reason} session=${sessionId} error=${e?.message || e}`)
+    }
+    await wait(80)
+    try {
+      session?.conn?.end?.()
+    } catch (e) {
+      logMain(`ssh cleanup conn end failed reason=${reason} session=${sessionId} error=${e?.message || e}`)
+    }
+  }))
+  logMain(`ssh cleanup end reason=${reason}`)
+}
+
+async function closeAllSerialPorts(reason = 'app-exit') {
+  const entries = [...serialPorts.entries()]
+  if (!entries.length) return
+  logMain(`serial cleanup start reason=${reason} count=${entries.length}`)
+  await Promise.allSettled(entries.map(([key, port]) => new Promise((resolve) => {
+    const finish = () => {
+      serialPorts.delete(key)
+      resolve(true)
+    }
+    try {
+      if (!port) return finish()
+      if (port.isOpen === false || typeof port.close !== 'function') {
+        try {
+          port.destroy?.()
+        } catch {}
+        return finish()
+      }
+      let settled = false
+      const done = () => {
+        if (settled) return
+        settled = true
+        finish()
+      }
+      const timer = setTimeout(() => {
+        try {
+          port.destroy?.()
+        } catch {}
+        done()
+      }, 800)
+      port.close(() => {
+        clearTimeout(timer)
+        done()
+      })
+    } catch (e) {
+      logMain(`serial cleanup failed reason=${reason} path=${key} error=${e?.message || e}`)
+      try {
+        port?.destroy?.()
+      } catch {}
+      finish()
+    }
+  })))
+  logMain(`serial cleanup end reason=${reason}`)
+}
+
+async function closeAllWindowsForInstall(reason = 'update-install') {
+  const windows = BrowserWindow.getAllWindows()
+  if (!windows.length) return
+  logMain(`window cleanup start reason=${reason} count=${windows.length}`)
+  windows.forEach((win) => {
+    try {
+      if (win.isDestroyed()) return
+      win.hide()
+      win.close()
+    } catch (e) {
+      logMain(`window close failed reason=${reason} error=${e?.message || e}`)
+    }
+  })
+  await wait(150)
+  BrowserWindow.getAllWindows().forEach((win) => {
+    try {
+      if (!win.isDestroyed()) win.destroy()
+    } catch (e) {
+      logMain(`window destroy failed reason=${reason} error=${e?.message || e}`)
+    }
+  })
+  logMain(`window cleanup end reason=${reason}`)
+}
+
+function scheduleWindowsSelfKill(reason = 'update-install') {
+  if (process.platform !== 'win32' || isDev) return
+  const cmd = `ping -n 3 127.0.0.1 >nul && taskkill /F /T /PID ${process.pid} >nul 2>&1`
+  try {
+    const child = spawn(process.env.comspec || 'cmd.exe', ['/d', '/s', '/c', cmd], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    child.unref()
+    logMain(`windows self kill scheduled reason=${reason} pid=${process.pid}`)
+  } catch (e) {
+    logMain(`windows self kill schedule failed reason=${reason} error=${e?.message || e}`)
+  }
+}
+
+async function cleanupAppRuntimeForInstall(reason = 'update-install') {
+  if (runtimeCleanupPromise) {
+    logMain(`runtime cleanup reuse reason=${reason} activeReason=${runtimeCleanupReason}`)
+    return runtimeCleanupPromise
+  }
+  runtimeCleanupReason = reason
+  suppressWindowAllClosedQuit = true
+  runtimeCleanupPromise = (async () => {
+    logMain(`runtime cleanup start reason=${reason}`)
+    await Promise.allSettled([
+      closeAllSshSessions(reason),
+      closeAllSerialPorts(reason),
+    ])
+    await closeAllWindowsForInstall(reason)
+    logMain(`runtime cleanup end reason=${reason}`)
+  })().finally(() => {
+    runtimeCleanupPromise = null
+    runtimeCleanupReason = ''
+  })
+  return runtimeCleanupPromise
+}
+
 function broadcastUpdateState() {
   broadcast('update:status', { ...updateState })
 }
@@ -520,6 +656,37 @@ function compareVersions(a, b) {
   return 0
 }
 
+function getPlatformAssetFileName(version) {
+  const normalized = normalizeVersion(version)
+  if (!normalized) return ''
+  if (process.platform === 'win32') return `AstraShell-Setup-${normalized}.exe`
+  if (process.platform === 'darwin') return `AstraShell-${normalized}-arm64.dmg`
+  return `AstraShell-${normalized}-arm64.AppImage`
+}
+
+function joinUrl(baseUrl, fileName) {
+  if (!baseUrl || !fileName) return ''
+  return `${trimTrailingSlash(baseUrl)}/${fileName}`
+}
+
+function getGitHubReleaseUrl(version) {
+  const normalized = normalizeVersion(version)
+  return normalized ? `https://github.com/getiid/AstraShell/releases/tag/v${normalized}` : ''
+}
+
+function getGitHubAssetUrl(version) {
+  const normalized = normalizeVersion(version)
+  const fileName = getPlatformAssetFileName(normalized)
+  return normalized && fileName
+    ? `https://github.com/getiid/AstraShell/releases/download/v${normalized}/${fileName}`
+    : ''
+}
+
+function getQiniuAssetUrl(version) {
+  const fileName = getPlatformAssetFileName(version)
+  return joinUrl(getQiniuUpdateBaseUrl(), fileName)
+}
+
 function pickMirrorAsset(assets, latestVersion) {
   if (!Array.isArray(assets) || assets.length === 0) return null
   const version = normalizeVersion(latestVersion)
@@ -574,6 +741,8 @@ async function checkGiteeMirrorForUpdates() {
       downloading: false,
       progress: 0,
       source: 'gitee',
+      downloadUrl: '',
+      releaseUrl: giteeMirror.releasePage,
       mirrorTag: tag,
       mirrorDownloadUrl: '',
       mirrorReleaseUrl: giteeMirror.releasePage,
@@ -597,6 +766,8 @@ async function checkGiteeMirrorForUpdates() {
     downloading: false,
     progress: 0,
     source: 'gitee',
+    downloadUrl: asset.url,
+    releaseUrl: giteeMirror.releasePage,
     mirrorTag: tag,
     mirrorDownloadUrl: asset.url,
     mirrorReleaseUrl: giteeMirror.releasePage,
@@ -673,6 +844,8 @@ async function installMirrorUpdatePackage() {
     throw new Error('镜像安装包不存在，请先下载')
   }
   if (process.platform === 'win32') {
+    await cleanupAppRuntimeForInstall('mirror-update-install')
+    scheduleWindowsSelfKill('mirror-update-install')
     const child = spawn(filePath, [], { detached: true, stdio: 'ignore' })
     child.unref()
     setTimeout(() => app.quit(), 200)
@@ -734,7 +907,6 @@ function initAutoUpdater() {
   updaterInitialized = true
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
-  autoUpdater.isAddNoCacheQuery = true
   applyAutoUpdaterFeed(getQiniuUpdateBaseUrl() ? 'qiniu' : 'github')
 
   autoUpdater.on('checking-for-update', () => {
@@ -746,6 +918,8 @@ function initAutoUpdater() {
       downloading: false,
       progress: 0,
       source,
+      downloadUrl: '',
+      releaseUrl: '',
       mirrorDownloadUrl: '',
       mirrorReleaseUrl: '',
       mirrorDownloadedFilePath: '',
@@ -754,19 +928,24 @@ function initAutoUpdater() {
 
   autoUpdater.on('update-available', (info) => {
     const source = activeUpdateProvider
+    const latestVersion = info?.version || ''
     const installHint = process.platform === 'darwin' && !macAutoInstallSupport.supported
       ? '，当前构建仅支持手动安装（请下载 DMG）'
       : ''
+    const downloadUrl = source === 'qiniu' ? getQiniuAssetUrl(latestVersion) : getGitHubAssetUrl(latestVersion)
+    const releaseUrl = source === 'qiniu' ? downloadUrl : getGitHubReleaseUrl(latestVersion)
     setUpdateState({
       status: 'available',
-      message: `发现新版本：${info?.version || '未知版本'}（${getUpdateSourceLabel(source)}）${installHint}`,
-      latestVersion: info?.version || '',
+      message: `发现新版本：${latestVersion || '未知版本'}（${getUpdateSourceLabel(source)}）${installHint}`,
+      latestVersion,
       hasUpdate: true,
       downloaded: false,
       checking: false,
       downloading: false,
       progress: 0,
       source,
+      downloadUrl,
+      releaseUrl,
       mirrorTag: '',
       mirrorDownloadUrl: '',
       mirrorReleaseUrl: '',
@@ -786,6 +965,8 @@ function initAutoUpdater() {
       downloading: false,
       progress: 0,
       source,
+      downloadUrl: '',
+      releaseUrl: '',
       mirrorTag: '',
       mirrorDownloadUrl: '',
       mirrorReleaseUrl: '',
@@ -948,6 +1129,10 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  if (suppressWindowAllClosedQuit) {
+    logMain('window-all-closed suppressed during update install flow')
+    return
+  }
   if (process.platform !== 'darwin') app.quit()
 })
 
@@ -981,6 +1166,17 @@ ipcMain.handle('app:restart', async () => {
     app.exit(0)
   })
   return { ok: true }
+})
+
+ipcMain.handle('app:open-external', async (_event, payload) => {
+  const url = String(payload?.url || '').trim()
+  if (!/^https?:\/\//i.test(url)) return { ok: false, error: '无效链接' }
+  try {
+    await shell.openExternal(url)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e?.message || '打开链接失败' }
+  }
 })
 
 ipcMain.handle('clipboard:read', async () => {
@@ -1048,7 +1244,13 @@ ipcMain.handle('update:install', async () => {
     return { ok: false, error: macManualInstallTip }
   }
   if (!updateState.downloaded) return { ok: false, error: '更新包未下载完成' }
-  setImmediate(() => autoUpdater.quitAndInstall(false, true))
+  setUpdateState({
+    status: 'installing',
+    message: '正在关闭应用并安装更新...',
+  })
+  await cleanupAppRuntimeForInstall('auto-update-install')
+  scheduleWindowsSelfKill('auto-update-install')
+  setTimeout(() => autoUpdater.quitAndInstall(false, true), 500)
   return { ok: true }
 })
 

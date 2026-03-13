@@ -311,6 +311,8 @@ const updateInfo = ref({
   checking: false,
   downloading: false,
   progress: 0,
+  downloadUrl: '',
+  releaseUrl: '',
 })
 
 type UpdateStatePayload = Partial<{
@@ -324,10 +326,20 @@ type UpdateStatePayload = Partial<{
   checking: boolean
   downloading: boolean
   progress: number
+  downloadUrl: string
+  releaseUrl: string
 }>
 type UpdateActionResult = { ok: boolean; error?: string }
 
 const updateActionBusy = ref(false)
+const isMacClient = computed(() => /mac/i.test(navigator.platform || ''))
+const showManualMacUpdate = computed(() => (
+  isMacClient.value
+  && updateInfo.value.hasUpdate
+  && !updateInfo.value.downloaded
+  && !!updateInfo.value.downloadUrl
+  && /手动安装|DMG/i.test(updateInfo.value.message || '')
+))
 const updateStatusText = computed(() => {
   const u = updateInfo.value
   const current = u.currentVersion || '-'
@@ -1831,6 +1843,8 @@ const mergeUpdateState = (payload: UpdateStatePayload = {}) => {
     checking: payload.checking ?? prev.checking,
     downloading: payload.downloading ?? prev.downloading,
     progress: Number(payload.progress ?? prev.progress ?? 0),
+    downloadUrl: payload.downloadUrl ?? prev.downloadUrl,
+    releaseUrl: payload.releaseUrl ?? prev.releaseUrl,
   }
 }
 
@@ -1860,6 +1874,14 @@ const checkAppUpdate = async () => runUpdateAction(() => window.lightterm.update
 const downloadAppUpdate = async () => runUpdateAction(() => window.lightterm.updateDownload(), '下载更新失败')
 
 const installAppUpdate = async () => runUpdateAction(() => window.lightterm.updateInstall(), '安装更新失败')
+
+const openManualUpdateLink = async (url: string) => {
+  if (!url) return
+  const res = await window.lightterm.appOpenExternal({ url })
+  if (!res.ok) {
+    mergeUpdateState({ message: `打开下载链接失败：${res.error || '未知错误'}` })
+  }
+}
 
 const refreshStorageInfo = async () => {
   const res = await window.lightterm.appGetStorage()
@@ -2420,6 +2442,23 @@ onBeforeUnmount(() => {
           <div class="update-progress-bar"><div class="update-progress-fill" :style="{ width: `${updateInfo.progress}%` }"></div></div>
           <span>{{ Math.round(updateInfo.progress) }}%</span>
         </div>
+        <div v-if="showManualMacUpdate" class="manual-update-card">
+          <div class="manual-update-head">
+            <strong>mac 当前版本需手动安装</strong>
+            <span>点击下方链接后会在浏览器中直接下载 DMG 到本地文件夹。</span>
+          </div>
+          <div class="manual-update-actions">
+            <button class="muted" @click="openManualUpdateLink(updateInfo.downloadUrl)">下载 DMG</button>
+            <button
+              v-if="updateInfo.releaseUrl"
+              class="ghost"
+              @click="openManualUpdateLink(updateInfo.releaseUrl)"
+            >
+              打开 Release 页面
+            </button>
+          </div>
+          <a class="manual-update-link" :href="updateInfo.downloadUrl" target="_blank" rel="noreferrer">{{ updateInfo.downloadUrl }}</a>
+        </div>
         <p class="hint">发布新版本到 GitHub Release 后，应用启动会自动检查；也可手动检查并一键更新。</p>
         <div class="divider"></div>
         <h3>本地存储</h3>
@@ -2713,6 +2752,12 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
 .update-progress { margin-top: 8px; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
 .update-progress-bar { height: 8px; background: #e5e7eb; border-radius: 999px; overflow: hidden; }
 .update-progress-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #2563eb); transition: width .2s ease; }
+.manual-update-card { margin-top: 10px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc; padding: 12px; display: grid; gap: 10px; }
+.manual-update-head { display: grid; gap: 4px; color: #334155; font-size: 13px; }
+.manual-update-head strong { color: #0f172a; font-size: 14px; }
+.manual-update-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.manual-update-link { color: #2563eb; font-size: 12px; word-break: break-all; text-decoration: none; }
+.manual-update-link:hover { text-decoration: underline; }
 .status-bar { height: 28px; border: 1px solid #d1d5db; border-radius: 8px; background: #f8fafc; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 12px; color: #374151; z-index: 50; }
 .fixed-bottom { position: fixed; left: 232px; right: 12px; bottom: 8px; }
 .layout.terminal-layout { grid-template-columns: 1fr; }
