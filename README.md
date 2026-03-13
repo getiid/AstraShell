@@ -111,9 +111,11 @@ AstraShell/
 - 仓库：<https://github.com/getiid/AstraShell>
 - 桌面端安装包：GitHub Releases 附件（`.dmg` / `.exe`）
 
-## 更新源策略（GitHub + Gitee）
+## 更新源策略（七牛 + GitHub + Gitee）
 
-- 客户端检查更新顺序：`GitHub -> Gitee`（GitHub 不通时自动回退）
+- 客户端检查更新顺序：`七牛 -> GitHub -> Gitee`
+- 默认七牛更新地址：`https://astra.jitux.com`
+- 如需改成其他目录前缀，可设置环境变量 `ASTRASHELL_UPDATE_BASE_URL`
 - 若要让 Gitee 也可自动更新，需在 Gitee Release 同步上传：
   - `AstraShell-Setup-x.y.z.exe`
   - `AstraShell-Setup-x.y.z.exe.blockmap`
@@ -121,3 +123,43 @@ AstraShell/
   - `AstraShell-x.y.z-arm64-mac.zip`
   - `latest.yml`
   - `latest-mac.yml`
+
+### 七牛发布命令
+
+在 `app/` 目录执行：
+
+```bash
+export QINIU_ACCESS_KEY=\"你的AK\"
+export QINIU_SECRET_KEY=\"你的SK\"
+export QINIU_BUCKET=\"astrashell\"
+export QINIU_REGION=\"z2\"
+export QINIU_PUBLIC_BASE_URL=\"https://astra.jitux.com\"
+npm run publish:qiniu
+```
+
+- 若你知道上传域名，也可直接用 `QINIU_UPLOAD_HOST` 代替 `QINIU_REGION`
+- 如果发版文件放到子目录，例如 `desktop/`，再加 `QINIU_PREFIX=\"desktop\"`
+- 七牛侧建议把 `latest.yml` / `latest-mac.yml` 的缓存时间设短，避免更新元数据缓存过久
+
+### 长期复用的发版方式
+
+推荐把密钥文件放到以下任一位置：
+
+- `app/.env.qiniu.local`
+- `~/.config/astrashell/qiniu.env`
+- `/tmp/astrashell-qiniu.env`
+
+模板可参考 [app/.env.qiniu.example](/Users/jonny/Desktop/AstraShell/app/.env.qiniu.example)。
+
+之后在 `app/` 目录直接执行：
+
+```bash
+npm run release:qiniu
+```
+
+常用参数：
+
+- `npm run release:qiniu -- --dry-run`：只检查上传列表，不真正上传
+- `npm run release:qiniu -- --publish-only`：跳过打包，只上传现有 `release/` 目录内容
+- `npm run release:qiniu -- --dist-only`：只打包，不上传
+- `npm run release:qiniu -- --env-file ~/.config/astrashell/qiniu.env`：显式指定密钥文件

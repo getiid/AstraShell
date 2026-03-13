@@ -26,7 +26,14 @@ let SerialPortCtor = null
 let serialModuleLoadError = ''
 const { autoUpdater } = electronUpdater
 let updaterInitialized = false
+let activeUpdateProvider = 'github'
 const macManualInstallTip = '当前构建未使用 Developer ID 签名，无法一键安装更新。请从 GitHub Release 下载 DMG 手动覆盖安装。'
+const githubReleaseProvider = {
+  provider: 'github',
+  owner: 'getiid',
+  repo: 'AstraShell',
+  releaseType: 'release',
+}
 const giteeMirror = {
   apiLatest: 'https://gitee.com/api/v5/repos/jitu/AstraShell/releases/latest',
   releasePage: 'https://gitee.com/jitu/AstraShell/releases',
@@ -87,6 +94,26 @@ function readSettings() {
 function writeSettings(next) {
   const p = getSettingsPath()
   fs.writeFileSync(p, JSON.stringify(next, null, 2), 'utf8')
+}
+
+function trimTrailingSlash(value) {
+  return String(value || '').trim().replace(/\/+$/, '')
+}
+
+function getQiniuUpdateBaseUrl() {
+  const settings = readSettings()
+  const raw = process.env.ASTRASHELL_UPDATE_BASE_URL
+    || process.env.QINIU_PUBLIC_BASE_URL
+    || settings.updateBaseUrl
+    || 'https://astra.jitux.com'
+  if (!/^https?:\/\//i.test(String(raw || '').trim())) return ''
+  return trimTrailingSlash(raw)
+}
+
+function getUpdateSourceLabel(source) {
+  if (source === 'qiniu') return '七牛'
+  if (source === 'gitee') return 'Gitee'
+  return 'GitHub'
 }
 
 function resolveDbPath() {
@@ -394,6 +421,22 @@ function normalizeUpdateError(err) {
   return message
 }
 
+function applyAutoUpdaterFeed(provider) {
+  activeUpdateProvider = provider
+  if (provider === 'qiniu') {
+    const baseUrl = getQiniuUpdateBaseUrl()
+    if (!baseUrl) throw new Error('七牛更新地址未配置')
+    autoUpdater.setFeedURL({
+      provider: 'generic',
+      url: baseUrl,
+      channel: 'latest',
+      useMultipleRangeRequest: false,
+    })
+    return
+  }
+  autoUpdater.setFeedURL(githubReleaseProvider)
+}
+
 function setUpdateState(patch) {
   Object.assign(updateState, patch)
   broadcastUpdateState()
@@ -586,7 +629,19 @@ async function installMirrorUpdatePackage() {
 async function checkForUpdatesNow() {
   if (isDev) return { ok: false, error: '开发模式不支持自动更新检查' }
   initAutoUpdater()
+  const qiniuBaseUrl = getQiniuUpdateBaseUrl()
+  if (qiniuBaseUrl) {
+    try {
+      applyAutoUpdaterFeed('qiniu')
+      await autoUpdater.checkForUpdates()
+      return { ok: true, source: 'qiniu', hasUpdate: !!updateState.hasUpdate }
+    } catch (e) {
+      const qiniuMessage = normalizeUpdateError(e)
+      logMain(`update check qiniu error: ${qiniuMessage}`)
+    }
+  }
   try {
+    applyAutoUpdaterFeed('github')
     await autoUpdater.checkForUpdates()
     return { ok: true }
   } catch (e) {
@@ -618,15 +673,18 @@ function initAutoUpdater() {
   updaterInitialized = true
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
+  autoUpdater.isAddNoCacheQuery = true
+  applyAutoUpdaterFeed(getQiniuUpdateBaseUrl() ? 'qiniu' : 'github')
 
   autoUpdater.on('checking-for-update', () => {
+    const source = activeUpdateProvider
     setUpdateState({
       status: 'checking',
-      message: '正在检查更新...',
+      message: `正在检查更新（${getUpdateSourceLabel(source)}）...`,
       checking: true,
       downloading: false,
       progress: 0,
-      source: 'github',
+      source,
       mirrorDownloadUrl: '',
       mirrorReleaseUrl: '',
       mirrorDownloadedFilePath: '',
@@ -634,19 +692,20 @@ function initAutoUpdater() {
   })
 
   autoUpdater.on('update-available', (info) => {
+    const source = activeUpdateProvider
     const installHint = process.platform === 'darwin' && !macAutoInstallSupport.supported
       ? '，当前构建仅支持手动安装（请下载 DMG）'
       : ''
     setUpdateState({
       status: 'available',
-      message: `发现新版本：${info?.version || '未知版本'}${installHint}`,
+      message: `发现新版本：${info?.version || '未知版本'}（${getUpdateSourceLabel(source)}）${installHint}`,
       latestVersion: info?.version || '',
       hasUpdate: true,
       downloaded: false,
       checking: false,
       downloading: false,
       progress: 0,
-      source: 'github',
+      source,
       mirrorTag: '',
       mirrorDownloadUrl: '',
       mirrorReleaseUrl: '',
@@ -655,16 +714,17 @@ function initAutoUpdater() {
   })
 
   autoUpdater.on('update-not-available', () => {
+    const source = activeUpdateProvider
     setUpdateState({
       status: 'idle',
-      message: `当前已是最新版本（${app.getVersion()}）`,
+      message: `当前已是最新版本（${app.getVersion()}，${getUpdateSourceLabel(source)}）`,
       latestVersion: app.getVersion(),
       hasUpdate: false,
       downloaded: false,
       checking: false,
       downloading: false,
       progress: 0,
-      source: 'github',
+      source,
       mirrorTag: '',
       mirrorDownloadUrl: '',
       mirrorReleaseUrl: '',
@@ -673,39 +733,43 @@ function initAutoUpdater() {
   })
 
   autoUpdater.on('download-progress', (progress) => {
+    const source = activeUpdateProvider
     setUpdateState({
       status: 'downloading',
-      message: `更新下载中：${Math.round(progress?.percent || 0)}%`,
+      message: `更新下载中（${getUpdateSourceLabel(source)}）：${Math.round(progress?.percent || 0)}%`,
       downloading: true,
       progress: Number(progress?.percent || 0),
+      source,
     })
   })
 
   autoUpdater.on('update-downloaded', (info) => {
+    const source = activeUpdateProvider
     setUpdateState({
       status: 'downloaded',
-      message: `更新已下载完成：${info?.version || ''}，可一键重启安装`,
+      message: `更新已下载完成：${info?.version || ''}（${getUpdateSourceLabel(source)}），可一键重启安装`,
       latestVersion: info?.version || updateState.latestVersion,
       hasUpdate: true,
       downloaded: true,
       checking: false,
       downloading: false,
       progress: 100,
-      source: 'github',
+      source,
       mirrorDownloadedFilePath: '',
     })
   })
 
   autoUpdater.on('error', (e) => {
     const message = normalizeUpdateError(e)
+    const source = activeUpdateProvider
     setUpdateState({
       status: 'error',
-      message: `更新异常：${message}`,
+      message: `更新异常（${getUpdateSourceLabel(source)}）：${message}`,
       checking: false,
       downloading: false,
-      source: 'github',
+      source,
     })
-    logMain(`autoUpdater error: ${message}`)
+    logMain(`autoUpdater error [${source}]: ${message}`)
   })
 }
 

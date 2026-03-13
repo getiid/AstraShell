@@ -332,7 +332,9 @@ const updateStatusText = computed(() => {
   const u = updateInfo.value
   const current = u.currentVersion || '-'
   const latest = u.latestVersion || '-'
-  const sourceLabel = u.source === 'gitee' ? 'Gitee' : 'GitHub'
+  const sourceLabel = u.source === 'qiniu'
+    ? '七牛'
+    : (u.source === 'gitee' ? 'Gitee' : 'GitHub')
   return `当前版本：${current} ｜ 最新版本：${latest} ｜ 更新源：${sourceLabel} ｜ ${u.message || '就绪'}`
 })
 
