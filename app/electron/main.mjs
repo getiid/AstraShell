@@ -7,7 +7,6 @@ import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { v4 as uuidv4 } from 'uuid'
 import { Client as SSHClient } from 'ssh2'
-import { SerialPort } from 'serialport'
 import sshpk from 'sshpk'
 import electronUpdater from 'electron-updater'
 
@@ -23,6 +22,8 @@ const serialPorts = new Map()
 const sshSessions = new Map()
 let db
 let vaultKey = null
+let SerialPortCtor = null
+let serialModuleLoadError = ''
 const { autoUpdater } = electronUpdater
 let updaterInitialized = false
 const macManualInstallTip = '当前构建未使用 Developer ID 签名，无法一键安装更新。请从 GitHub Release 下载 DMG 手动覆盖安装。'
@@ -229,6 +230,18 @@ function connectConfigFromPayload(payload) {
     passphrase: payload.passphrase || undefined,
     readyTimeout: 12000,
     tryKeyboard: true,
+  }
+}
+
+async function getSerialPortCtor() {
+  if (SerialPortCtor) return SerialPortCtor
+  try {
+    const mod = await import('serialport')
+    SerialPortCtor = mod.SerialPort
+    return SerialPortCtor
+  } catch (e) {
+    serialModuleLoadError = e?.message || String(e)
+    throw new Error(`串口模块加载失败：${serialModuleLoadError}`)
   }
 }
 
@@ -894,15 +907,43 @@ ipcMain.handle('sync:push-now', async () => {
   return { ok: true, pushed: items.length }
 })
 
-ipcMain.handle('serial:list', async () => (await SerialPort.list()).map((p) => ({ path: p.path, manufacturer: p.manufacturer, serialNumber: p.serialNumber, vendorId: p.vendorId, productId: p.productId })))
+ipcMain.handle('serial:list', async () => {
+  try {
+    const SerialPort = await getSerialPortCtor()
+    return (await SerialPort.list()).map((p) => ({
+      path: p.path,
+      manufacturer: p.manufacturer,
+      serialNumber: p.serialNumber,
+      vendorId: p.vendorId,
+      productId: p.productId,
+    }))
+  } catch (e) {
+    logMain(`serial:list unavailable: ${e?.message || e}`)
+    return []
+  }
+})
 ipcMain.handle('serial:open', async (_event, options) => {
-  const key = options.path
-  if (serialPorts.has(key)) return { ok: true }
-  const port = new SerialPort({ path: options.path, baudRate: Number(options.baudRate || 115200), dataBits: Number(options.dataBits || 8), stopBits: Number(options.stopBits || 1), parity: options.parity || 'none', autoOpen: true })
-  serialPorts.set(key, port)
-  port.on('data', (data) => broadcast('serial:data', { path: key, data: data.toString('utf8') }))
-  port.on('error', (err) => broadcast('serial:error', { path: key, error: err.message }))
-  return { ok: true }
+  try {
+    const SerialPort = await getSerialPortCtor()
+    const key = options.path
+    if (serialPorts.has(key)) return { ok: true }
+    const port = new SerialPort({
+      path: options.path,
+      baudRate: Number(options.baudRate || 115200),
+      dataBits: Number(options.dataBits || 8),
+      stopBits: Number(options.stopBits || 1),
+      parity: options.parity || 'none',
+      autoOpen: true,
+    })
+    serialPorts.set(key, port)
+    port.on('data', (data) => broadcast('serial:data', { path: key, data: data.toString('utf8') }))
+    port.on('error', (err) => broadcast('serial:error', { path: key, error: err.message }))
+    return { ok: true }
+  } catch (e) {
+    const message = serialModuleLoadError || e?.message || '串口模块不可用'
+    logMain(`serial:open failed: ${message}`)
+    return { ok: false, error: message }
+  }
 })
 ipcMain.handle('serial:send', async (_event, payload) => {
   const port = serialPorts.get(payload.path)
