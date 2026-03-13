@@ -1549,6 +1549,10 @@ const deleteSftp = async () => {
 
 const plainVaultMessage = (msg: string) => String(msg || '').replace(/^[✅❌]\s*/, '').trim()
 const dbFolderFromPath = (dbPath: string) => String(dbPath || '').replace(/[\\/]lightterm\.db$/i, '')
+const formatAppError = (error: unknown) => {
+  if (error instanceof Error) return error.message || String(error)
+  return String(error || '未知错误')
+}
 
 const ensureStartupDbFolder = () => {
   if (startupDbFolder.value) return
@@ -1654,10 +1658,19 @@ const checkVault = async () => {
     return
   }
   bridgeReady.value = true
-  const res = await window.lightterm.vaultStatus()
-  vaultInitialized.value = res.initialized
-  vaultUnlocked.value = res.unlocked
-  evaluateVaultGate()
+  try {
+    const res = await window.lightterm.vaultStatus()
+    vaultInitialized.value = !!res.initialized
+    vaultUnlocked.value = !!res.unlocked
+    evaluateVaultGate()
+  } catch (error) {
+    bridgeReady.value = false
+    vaultInitialized.value = false
+    vaultUnlocked.value = false
+    startupGateMode.value = 'init'
+    startupGateVisible.value = true
+    vaultStatus.value = `❌ 读取密钥仓库状态失败：${formatAppError(error)}`
+  }
 }
 const initVault = async () => {
   try {
@@ -1884,10 +1897,14 @@ const openManualUpdateLink = async (url: string) => {
 }
 
 const refreshStorageInfo = async () => {
-  const res = await window.lightterm.appGetStorage()
-  if (res.ok) {
-    storageDbPath.value = res.dbPath || ''
-    ensureStartupDbFolder()
+  try {
+    const res = await window.lightterm.appGetStorage()
+    if (res.ok) {
+      storageDbPath.value = res.dbPath || ''
+      ensureStartupDbFolder()
+    }
+  } catch (error) {
+    startupGateError.value = `读取数据库路径失败：${formatAppError(error)}`
   }
 }
 
@@ -1936,16 +1953,47 @@ onMounted(async () => {
   startupGateVisible.value = true
   startupGateMode.value = 'loading'
   startupGateError.value = ''
+  try {
+    await refreshStorageInfo()
+    await checkVault()
+  } catch (error) {
+    startupGateError.value = `启动检查失败：${formatAppError(error)}`
+    if (startupGateMode.value === 'loading') startupGateMode.value = 'init'
+  }
+
   restoreSshTabs()
-  await restoreSnippets()
   initTerminal()
-  await loadSerialPorts()
-  await refreshHosts()
-  await checkVault()
-  await refreshVaultKeys()
-  await refreshLocalSyncOverview()
-  await refreshUpdateState()
-  await loadLocalFs()
+
+  const startupTasks: Array<[string, () => Promise<unknown>]> = [
+    ['代码片段', restoreSnippets],
+    ['串口列表', loadSerialPorts],
+    ['主机列表', refreshHosts],
+    ['密钥列表', refreshVaultKeys],
+    ['同步信息', refreshLocalSyncOverview],
+    ['更新状态', refreshUpdateState],
+    ['本地文件系统', loadLocalFs],
+  ]
+
+  const failures: string[] = []
+  for (const [label, task] of startupTasks) {
+    try {
+      await task()
+    } catch (error) {
+      failures.push(`${label}加载失败：${formatAppError(error)}`)
+    }
+  }
+
+  if (failures.length > 0) {
+    const message = failures[0] || '启动初始化失败'
+    if (startupGateVisible.value && startupGateMode.value === 'loading') {
+      startupGateMode.value = vaultInitialized.value ? 'unlock' : 'init'
+      startupGateError.value = message
+    } else if (!snippetStatus.value) {
+      snippetStatus.value = message
+    }
+    console.error('[startup]', failures)
+  }
+
   window.addEventListener('resize', () => {
     fitAddon?.fit()
     if (sshConnected.value && terminal) window.lightterm.sshResize({ sessionId: sshSessionId.value, cols: terminal.cols, rows: terminal.rows })
