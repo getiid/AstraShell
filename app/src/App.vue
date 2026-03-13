@@ -520,7 +520,18 @@ const applySnippetState = (items: SnippetItem[], extraCategories: string[]) => {
 }
 
 const saveSnippetState = async (items = snippetItems.value, extraCategories = snippetExtraCategories.value) => {
-  const res = await window.lightterm.snippetsSetState({ items, extraCategories })
+  const plainItems = (Array.isArray(items) ? items : []).map((item) => ({
+    id: String(item?.id || ''),
+    name: String(item?.name || ''),
+    category: String(item?.category || ''),
+    hostId: String(item?.hostId || ''),
+    description: String(item?.description || ''),
+    commands: String(item?.commands || ''),
+    createdAt: Number(item?.createdAt || 0),
+    updatedAt: Number(item?.updatedAt || 0),
+  }))
+  const plainExtraCategories = (Array.isArray(extraCategories) ? extraCategories : []).map((value) => String(value || ''))
+  const res = await window.lightterm.snippetsSetState({ items: plainItems, extraCategories: plainExtraCategories })
   if (!res.ok) {
     snippetStatus.value = `代码片段保存失败：${res.error || '未知错误'}`
     return false
