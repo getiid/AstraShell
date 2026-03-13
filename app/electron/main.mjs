@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import os from 'node:os'
 import crypto from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { v4 as uuidv4 } from 'uuid'
 import { Client as SSHClient } from 'ssh2'
 import { SerialPort } from 'serialport'
@@ -24,9 +25,32 @@ let db
 let vaultKey = null
 const { autoUpdater } = electronUpdater
 let updaterInitialized = false
+const macManualInstallTip = '当前构建未使用 Developer ID 签名，无法一键安装更新。请从 GitHub Release 下载 DMG 手动覆盖安装。'
+
+function checkMacAutoInstallSupport() {
+  if (process.platform !== 'darwin' || isDev) return { supported: true, reason: '' }
+  try {
+    const appBundlePath = path.resolve(process.execPath, '../../..')
+    const res = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', appBundlePath], { encoding: 'utf8' })
+    const output = `${res.stdout || ''}\n${res.stderr || ''}`
+    if (res.status !== 0) {
+      return { supported: false, reason: '无法验证当前应用签名状态' }
+    }
+    if (!/Authority=Developer ID Application:/i.test(output)) {
+      return { supported: false, reason: '当前应用未使用 Developer ID Application 证书签名' }
+    }
+    return { supported: true, reason: '' }
+  } catch {
+    return { supported: false, reason: '无法读取当前应用签名信息' }
+  }
+}
+
+const macAutoInstallSupport = checkMacAutoInstallSupport()
 const updateState = {
   status: 'idle',
-  message: isDev ? '开发模式：自动更新已禁用' : '等待检查更新',
+  message: isDev
+    ? '开发模式：自动更新已禁用'
+    : (process.platform === 'darwin' && !macAutoInstallSupport.supported ? `等待检查更新（仅手动安装）` : '等待检查更新'),
   currentVersion: app.getVersion(),
   latestVersion: '',
   hasUpdate: false,
@@ -336,6 +360,9 @@ function broadcastUpdateState() {
 
 function normalizeUpdateError(err) {
   const message = String(err?.message || err || '未知错误')
+  if (/code signature|did not pass validation|shipit/i.test(message)) {
+    return `更新包签名校验失败：${macManualInstallTip}`
+  }
   if (/status code 401|status code 403|unauthorized/i.test(message)) {
     return '更新源鉴权失败：请确认 GitHub release 可访问，或配置 GH_TOKEN。'
   }
@@ -385,9 +412,12 @@ function initAutoUpdater() {
   })
 
   autoUpdater.on('update-available', (info) => {
+    const installHint = process.platform === 'darwin' && !macAutoInstallSupport.supported
+      ? '，当前构建仅支持手动安装（请下载 DMG）'
+      : ''
     setUpdateState({
       status: 'available',
-      message: `发现新版本：${info?.version || '未知版本'}`,
+      message: `发现新版本：${info?.version || '未知版本'}${installHint}`,
       latestVersion: info?.version || '',
       hasUpdate: true,
       downloaded: false,
@@ -610,6 +640,9 @@ ipcMain.handle('update:check', async () => {
 
 ipcMain.handle('update:download', async () => {
   if (isDev) return { ok: false, error: '开发模式不支持下载更新' }
+  if (process.platform === 'darwin' && !macAutoInstallSupport.supported) {
+    return { ok: false, error: macManualInstallTip }
+  }
   initAutoUpdater()
   try {
     await autoUpdater.downloadUpdate()
@@ -623,6 +656,9 @@ ipcMain.handle('update:download', async () => {
 
 ipcMain.handle('update:install', async () => {
   if (isDev) return { ok: false, error: '开发模式不支持安装更新' }
+  if (process.platform === 'darwin' && !macAutoInstallSupport.supported) {
+    return { ok: false, error: macManualInstallTip }
+  }
   if (!updateState.downloaded) return { ok: false, error: '更新包未下载完成' }
   setImmediate(() => autoUpdater.quitAndInstall(false, true))
   return { ok: true }
