@@ -2,10 +2,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { Server, FolderTree, Cable, KeyRound, RefreshCcwDot, Settings, Pencil } from 'lucide-vue-next'
+import { Server, FolderTree, Cable, KeyRound, Settings, Pencil } from 'lucide-vue-next'
 import '@xterm/xterm/css/xterm.css'
 
-type NavKey = 'hosts' | 'sftp' | 'snippets' | 'serial' | 'vault' | 'sync' | 'settings'
+type NavKey = 'hosts' | 'sftp' | 'snippets' | 'serial' | 'vault' | 'settings'
 const nav = ref<NavKey>('hosts')
 const termEl = ref<HTMLElement | null>(null)
 
@@ -286,6 +286,20 @@ const updateInfo = ref({
   downloading: false,
   progress: 0,
 })
+
+type UpdateStatePayload = Partial<{
+  status: string
+  message: string
+  currentVersion: string
+  latestVersion: string
+  hasUpdate: boolean
+  downloaded: boolean
+  checking: boolean
+  downloading: boolean
+  progress: number
+}>
+type UpdateActionResult = { ok: boolean; error?: string }
+
 const updateActionBusy = ref(false)
 const updateStatusText = computed(() => {
   const u = updateInfo.value
@@ -1522,56 +1536,55 @@ const pushSyncNow = async () => {
 }
 const copyDbPath = async () => {
   if (!storageDbPath.value) return
-  await navigator.clipboard.writeText(storageDbPath.value)
-  syncStatusText.value = '数据库路径已复制'
+  try {
+    await navigator.clipboard.writeText(storageDbPath.value)
+    syncStatusText.value = '数据库路径已复制'
+  } catch {
+    syncStatusText.value = '复制失败：请检查系统剪贴板权限'
+  }
 }
 
-const applyUpdateState = (payload: any) => {
+const mergeUpdateState = (payload: UpdateStatePayload = {}) => {
+  const prev = updateInfo.value
   updateInfo.value = {
-    status: payload?.status || updateInfo.value.status,
-    message: payload?.message || updateInfo.value.message,
-    currentVersion: payload?.currentVersion || updateInfo.value.currentVersion,
-    latestVersion: payload?.latestVersion || updateInfo.value.latestVersion,
-    hasUpdate: !!payload?.hasUpdate,
-    downloaded: !!payload?.downloaded,
-    checking: !!payload?.checking,
-    downloading: !!payload?.downloading,
-    progress: Number(payload?.progress || 0),
+    status: payload.status ?? prev.status,
+    message: payload.message ?? prev.message,
+    currentVersion: payload.currentVersion ?? prev.currentVersion,
+    latestVersion: payload.latestVersion ?? prev.latestVersion,
+    hasUpdate: payload.hasUpdate ?? prev.hasUpdate,
+    downloaded: payload.downloaded ?? prev.downloaded,
+    checking: payload.checking ?? prev.checking,
+    downloading: payload.downloading ?? prev.downloading,
+    progress: Number(payload.progress ?? prev.progress ?? 0),
+  }
+}
+
+const runUpdateAction = async (
+  action: () => Promise<UpdateActionResult>,
+  failurePrefix: string,
+) => {
+  updateActionBusy.value = true
+  try {
+    const res = await action()
+    if (!res.ok) {
+      mergeUpdateState({ message: `${failurePrefix}：${res.error || '未知错误'}` })
+    }
+  } finally {
+    updateActionBusy.value = false
   }
 }
 
 const refreshUpdateState = async () => {
   const res = await window.lightterm.updateGetState()
   if (!res.ok) return
-  applyUpdateState(res)
+  mergeUpdateState(res)
 }
 
-const checkAppUpdate = async () => {
-  updateActionBusy.value = true
-  const res = await window.lightterm.updateCheck()
-  if (!res.ok) {
-    updateInfo.value.message = `检查更新失败：${res.error || '未知错误'}`
-  }
-  updateActionBusy.value = false
-}
+const checkAppUpdate = async () => runUpdateAction(() => window.lightterm.updateCheck(), '检查更新失败')
 
-const downloadAppUpdate = async () => {
-  updateActionBusy.value = true
-  const res = await window.lightterm.updateDownload()
-  if (!res.ok) {
-    updateInfo.value.message = `下载更新失败：${res.error || '未知错误'}`
-  }
-  updateActionBusy.value = false
-}
+const downloadAppUpdate = async () => runUpdateAction(() => window.lightterm.updateDownload(), '下载更新失败')
 
-const installAppUpdate = async () => {
-  updateActionBusy.value = true
-  const res = await window.lightterm.updateInstall()
-  if (!res.ok) {
-    updateInfo.value.message = `安装更新失败：${res.error || '未知错误'}`
-  }
-  updateActionBusy.value = false
-}
+const installAppUpdate = async () => runUpdateAction(() => window.lightterm.updateInstall(), '安装更新失败')
 
 const refreshStorageInfo = async () => {
   const res = await window.lightterm.appGetStorage()
@@ -1579,6 +1592,11 @@ const refreshStorageInfo = async () => {
     storageDbPath.value = res.dbPath || ''
   }
 }
+
+const refreshLocalSyncOverview = async () => {
+  await Promise.all([refreshStorageInfo(), refreshSyncStatus()])
+}
+
 const pickStorageFolder = async () => {
   const res = await window.lightterm.appPickStorageFolder()
   if (res.ok && res.folder) storageFolderInput.value = res.folder
@@ -1589,7 +1607,7 @@ const applyStorageFolder = async () => {
   storageMsg.value = res.ok
     ? `已设置数据库路径：${res.dbPath}（重启应用生效）`
     : `设置失败：${res.error}`
-  await refreshStorageInfo()
+  await refreshLocalSyncOverview()
 }
 
 const loadSerialPorts = async () => {
@@ -1624,8 +1642,7 @@ onMounted(async () => {
   await refreshHosts()
   await checkVault()
   await refreshVaultKeys()
-  await refreshSyncStatus()
-  await refreshStorageInfo()
+  await refreshLocalSyncOverview()
   await refreshUpdateState()
   await loadLocalFs()
   window.addEventListener('resize', () => {
@@ -1636,7 +1653,7 @@ onMounted(async () => {
     if (p.type === 'upload') sftpUploadProgress.value = p.percent
     if (p.type === 'download') sftpDownloadProgress.value = p.percent
   })
-  window.lightterm.onUpdateStatus((payload) => applyUpdateState(payload))
+  window.lightterm.onUpdateStatus((payload) => mergeUpdateState(payload))
   window.addEventListener('click', hideAllMenus)
   window.addEventListener('keydown', handleTerminalHotkeys)
 })
@@ -1657,7 +1674,6 @@ onBeforeUnmount(() => {
         <li :class="{ active: nav === 'snippets' }" @click="focusTerminal = false; nav = 'snippets'"><Pencil :size="16" /> 代码片段</li>
         <li :class="{ active: nav === 'serial' }" @click="focusTerminal = false; nav = 'serial'"><Cable :size="16" /> 串口</li>
         <li :class="{ active: nav === 'vault' }" @click="focusTerminal = false; nav = 'vault'"><KeyRound :size="16" /> 密钥仓库</li>
-        <li :class="{ active: nav === 'sync' }" @click="focusTerminal = false; nav = 'sync'"><RefreshCcwDot :size="16" /> 本地同步</li>
         <li :class="{ active: nav === 'settings' }" @click="focusTerminal = false; nav = 'settings'"><Settings :size="16" /> 设置</li>
       </ul>
     </aside>
@@ -1979,7 +1995,7 @@ onBeforeUnmount(() => {
                 <div class="snippet-card-host">{{ snippetHostLabel(item.hostId) }}</div>
                 <div class="snippet-card-foot">
                   <span>{{ snippetCommandLines(item.commands).length }} 条命令</span>
-                  <button class="muted tiny" @click.stop="runSnippet(item)" :disabled="snippetRunning">执行</button>
+                  <button class="snippet-run-btn" @click.stop="runSnippet(item)" :disabled="snippetRunning">执行</button>
                 </div>
               </article>
               <div v-if="filteredSnippetItems.length === 0" class="file-row empty">暂无代码片段</div>
@@ -1992,7 +2008,7 @@ onBeforeUnmount(() => {
                 <Pencil :size="14" /> 片段编辑
                 <button class="ghost small" @click="clearSnippetEditor">清空</button>
               </div>
-              <div class="vault-form-grid">
+              <div class="vault-form-grid snippet-form-grid">
                 <input v-model="snippetEdit.name" placeholder="片段名称（如：部署 Docker）" />
                 <select v-model="snippetEdit.category">
                   <option v-for="c in snippetCategories" :key="c" :value="c">{{ c }}</option>
@@ -2001,7 +2017,7 @@ onBeforeUnmount(() => {
                   <option value="">使用当前 SSH 会话</option>
                   <option v-for="h in hostItems" :key="h.id" :value="h.id">{{ h.name }} ({{ h.host }})</option>
                 </select>
-                <input v-model="snippetEdit.description" placeholder="用途说明（可选）" />
+                <input v-model="snippetEdit.description" class="snippet-desc-input" placeholder="用途说明（可选）" />
                 <textarea
                   v-model="snippetEdit.commands"
                   class="snippet-command-input"
@@ -2009,11 +2025,11 @@ onBeforeUnmount(() => {
                   @contextmenu.prevent="openEditorContextMenu"
                 ></textarea>
                 <p class="hint">点击执行后会按行自动发送到 SSH 终端，并自动回车执行。</p>
-                <div class="vault-actions">
-                  <button class="ghost" @click="deleteSnippet">删除</button>
-                  <button class="muted" @click="runSnippet()" :disabled="snippetRunning">执行片段</button>
-                  <button class="danger" @click="stopSnippet" :disabled="!snippetRunning">停止</button>
-                  <button @click="saveSnippet">保存片段</button>
+                <div class="snippet-actions">
+                  <button class="snippet-btn ghost" @click="deleteSnippet">删除</button>
+                  <button class="snippet-btn primary" @click="runSnippet()" :disabled="snippetRunning">执行片段</button>
+                  <button class="snippet-btn danger" @click="stopSnippet" :disabled="!snippetRunning">停止</button>
+                  <button class="snippet-btn success" @click="saveSnippet">保存片段</button>
                 </div>
               </div>
               <p class="vault-status">{{ snippetStatus || '就绪' }}</p>
@@ -2108,20 +2124,6 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-else-if="!focusTerminal && nav === 'sync'" class="panel">
-        <h3>本地多端同步（共享文件夹模式）</h3>
-        <p>{{ syncStatusText }}</p>
-        <p>当前数据库：{{ storageDbPath }}</p>
-        <div class="grid">
-          <button class="muted" @click="refreshStorageInfo">刷新数据库路径</button>
-          <button class="muted" @click="copyDbPath">复制数据库路径</button>
-          <button @click="pushSyncNow">处理本地队列</button>
-          <button class="muted" @click="clearSyncQueue">清空本地队列</button>
-        </div>
-        <p>待处理变更：{{ syncQueueCount }}</p>
-        <p class="hint">建议：把数据库目录放到 iCloud/OneDrive/共享盘；同一时刻只在一台设备写入。</p>
-      </section>
-
       <section v-else-if="!focusTerminal && nav === 'settings'" class="panel">
         <h3>软件更新（GitHub Release）</h3>
         <p>{{ updateStatusText }}</p>
@@ -2143,10 +2145,22 @@ onBeforeUnmount(() => {
           <input v-model="storageFolderInput" placeholder="选择 iCloud/共享文件夹目录" />
           <button class="muted" @click="pickStorageFolder">选择目录</button>
           <button @click="applyStorageFolder">应用目录</button>
-          <button class="muted" @click="refreshStorageInfo">刷新</button>
+          <button class="muted" @click="refreshLocalSyncOverview">刷新</button>
         </div>
         <p>{{ storageMsg }}</p>
         <p class="hint">建议：跨设备同步时，只让一台设备在同一时刻写入数据库，避免冲突。</p>
+        <div class="divider"></div>
+        <h3>本地同步（共享文件夹模式）</h3>
+        <p>{{ syncStatusText }}</p>
+        <p>当前数据库：{{ storageDbPath }}</p>
+        <div class="grid">
+          <button class="muted" @click="refreshLocalSyncOverview">刷新数据库路径</button>
+          <button class="muted" @click="copyDbPath">复制数据库路径</button>
+          <button @click="pushSyncNow">处理本地队列</button>
+          <button class="muted" @click="clearSyncQueue">清空本地队列</button>
+        </div>
+        <p>待处理变更：{{ syncQueueCount }}</p>
+        <p class="hint">建议：把数据库目录放到 iCloud/OneDrive/共享盘；同一时刻只在一台设备写入。</p>
       </section>
 
       <section v-else-if="!focusTerminal" class="panel"><h3>模块建设中</h3><p>当前页面：{{ nav }}</p></section>
@@ -2315,25 +2329,39 @@ h4 { margin: 4px 0; font-size: 12px; font-weight: 600; }
 .snippets-run-settings { display: flex; align-items: center; gap: 8px; }
 .snippets-run-settings label { font-size: 12px; color: #475569; white-space: nowrap; }
 .snippets-run-settings input { width: 110px; }
-.snippets-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr) auto; gap: 12px; flex: 1; min-height: 0; }
+.snippets-layout { display: grid; grid-template-columns: 160px minmax(260px, 0.82fr) minmax(520px, 1.18fr); gap: 12px; flex: 1; min-height: 0; overflow: hidden; }
+.snippets-layout > * { min-width: 0; }
 .snippets-left { background: #edf2f8; border: 1px solid #d4dde8; border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
-.snippets-center { border: 1px solid #d1dae5; border-radius: 12px; padding: 12px; background: #eef3f8; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: hidden; }
+.snippets-center { border: 1px solid #d1dae5; border-radius: 12px; padding: 10px; background: #edf3f8; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: hidden; }
 .snippets-toolbar { display: flex; align-items: center; gap: 8px; }
 .snippets-toolbar input { flex: 1; min-width: 0; background: #fff; }
-.snippet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; overflow: auto; min-height: 0; align-content: start; }
-.snippet-card { background: #f8fafc; border: 1px solid #d4dce6; border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; min-height: 126px; }
+.snippet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 8px; overflow: auto; min-height: 0; align-content: start; }
+.snippet-card { background: #f8fafc; border: 1px solid #d4dce6; border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; min-height: 104px; }
 .snippet-card:hover { border-color: #93c5fd; background: #f3f8ff; }
 .snippet-card.activeSnippet { border-color: #3b82f6; box-shadow: inset 0 0 0 1px #3b82f6; background: #eff6ff; }
 .snippet-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.snippet-card-title { font-size: 14px; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.snippet-card-desc { font-size: 12px; color: #475569; line-height: 1.35; min-height: 32px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.snippet-card-title { font-size: 13px; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.snippet-card-desc { font-size: 11px; color: #475569; line-height: 1.35; min-height: 28px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .snippet-card-host { font-size: 11px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .snippet-card-foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #64748b; gap: 8px; }
-.snippet-card-foot button { flex-shrink: 0; }
-.snippets-editor-column { width: 380px; min-width: 380px; }
-.snippets-editor-column.visible { width: 380px; min-width: 380px; }
-.snippets-editor-panel { background: #f8fafc; border: 1px solid #d3dce6; border-radius: 12px; padding: 12px; height: 100%; overflow: auto; }
-.snippet-command-input { grid-column: span 2; min-height: 230px; font-family: ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; line-height: 1.45; }
+.snippet-run-btn { flex-shrink: 0; border: 1px solid #4f46e5; border-radius: 999px; background: linear-gradient(135deg, #4f46e5, #2563eb); color: #fff; font-size: 11px; padding: 4px 10px; }
+.snippets-editor-column { min-width: 0; }
+.snippets-editor-column.visible { min-width: 0; }
+.snippets-editor-panel { background: #f8fafc; border: 1px solid #d3dce6; border-radius: 12px; padding: 12px; height: 100%; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+.snippet-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; flex: 1; min-height: 0; overflow: auto; align-content: start; }
+.snippet-form-grid .snippet-desc-input { grid-column: span 2; }
+.snippet-form-grid .snippet-command-input,
+.snippet-form-grid .hint,
+.snippet-form-grid .snippet-actions { grid-column: span 2; }
+.snippet-command-input { min-height: 360px; font-family: ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; line-height: 1.45; }
+.snippet-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
+.snippet-btn { min-height: 38px; border-radius: 10px; font-size: 12px; font-weight: 600; border: 1px solid transparent; box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06); transition: transform .12s ease, box-shadow .2s ease, filter .2s ease; }
+.snippet-btn.primary { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; }
+.snippet-btn.success { background: linear-gradient(135deg, #0ea5e9, #0284c7); color: #fff; }
+.snippet-btn.danger { background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; }
+.snippet-btn.ghost { background: #f8fafc; color: #334155; border-color: #cbd5e1; }
+.snippet-btn:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 14px rgba(15, 23, 42, 0.12); filter: saturate(1.05); }
+.snippet-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .vault-panel { display:flex; flex-direction:column; gap:10px; min-height:0; }
 .vault-header { display:flex; flex-direction:column; gap:8px; }
 .vault-header h3 { margin:0; }
@@ -2397,7 +2425,7 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
   .hosts-editor-column { display: none; }
   .hosts-groups { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
   .host-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
-  .snippets-layout { grid-template-columns: 170px minmax(0, 1fr); }
+  .snippets-layout { grid-template-columns: 160px minmax(0, 1fr); }
   .snippets-editor-column { display: none; }
   .vault-layout { grid-template-columns: 1fr; }
   .vault-editor-column { width:auto; min-width:0; }

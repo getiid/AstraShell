@@ -91,6 +91,12 @@ npx electron-builder --mac --dir -c.mac.identity=null -c.mac.hardenedRuntime=fal
 
 - `app/release/mac-arm64/AstraShell.app`
 
+首次从压缩包或网络来源运行时，如果 macOS 提示损坏或无法打开，可在终端执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/AstraShell.app
+```
+
 ---
 
 ## Release 分发说明
