@@ -177,4 +177,4 @@ npm run build
 
 ## 仓库
 
-- GitHub: https://github.com/getiid/LightTerm
+- GitHub: https://github.com/getiid/AstraShell

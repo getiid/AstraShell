@@ -35,7 +35,7 @@
       {
         "provider": "github",
         "owner": "getiid",
-        "repo": "LightTerm",
+        "repo": "AstraShell",
         "releaseType": "release"
       }
     ],
