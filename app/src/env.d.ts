@@ -49,7 +49,7 @@ declare global {
       sshWrite: (payload: { sessionId: string; data: string }) => Promise<{ ok: boolean; error?: string }>
       sshResize: (payload: { sessionId: string; cols: number; rows: number }) => Promise<{ ok: boolean; error?: string }>
       sshDisconnect: (payload: { sessionId: string }) => Promise<{ ok: boolean; error?: string }>
-      onSshData: (handler: (data: { sessionId: string; data: string }) => void) => void
+      onSshData: (handler: (data: { sessionId: string; data: string; dataBase64?: string }) => void) => void
       onSshClose: (handler: (data: { sessionId: string }) => void) => void
       onSshError: (handler: (data: { sessionId: string; error: string }) => void) => void
 

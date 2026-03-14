@@ -1,7 +1,7 @@
 {
   "name": "astrashell-desktop",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "AstraShell desktop terminal for SSH, SFTP, snippets, serial tools and key vault.",
   "author": "Jonny",
   "type": "module",
@@ -63,16 +63,19 @@
       "category": "public.app-category.developer-tools"
     },
     "dmg": {
+      "icon": "build/icons/icon.icns",
       "contents": [
         {
           "x": 160,
-          "y": 220
+          "y": 220,
+          "type": "file"
         },
         {
           "x": 434,
           "y": 220,
           "type": "link",
-          "path": "/Applications"
+          "path": "/Applications",
+          "name": "Applications"
         },
         {
           "x": 297,

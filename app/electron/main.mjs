@@ -1557,18 +1557,43 @@ ipcMain.handle('ssh:test', async (_event, config) => await new Promise((resolve)
 ipcMain.handle('ssh:connect', async (_event, payload) => await new Promise((resolve) => {
   const sessionId = payload.sessionId
   if (!sessionId) return resolve({ ok: false, error: '缺少 sessionId' })
-  if (sshSessions.has(sessionId)) return resolve({ ok: true })
+  const existing = sshSessions.get(sessionId)
+  if (existing) {
+    try { existing.stream.end('exit\n') } catch {}
+    try { existing.conn.end() } catch {}
+    sshSessions.delete(sessionId)
+  }
   const conn = new SSHClient()
   attachKeyboardHandler(conn, payload.password)
+  let settled = false
+  const finish = (value) => {
+    if (settled) return
+    settled = true
+    resolve(value)
+  }
   conn.on('ready', () => {
     conn.shell({ term: 'xterm-256color', cols: 120, rows: 30 }, (err, stream) => {
-      if (err) return resolve({ ok: false, error: err.message })
+      if (err) return finish({ ok: false, error: err.message })
       sshSessions.set(sessionId, { conn, stream })
-      stream.on('data', (chunk) => broadcast('ssh:data', { sessionId, data: chunk.toString('utf8') }))
-      stream.on('close', () => { broadcast('ssh:close', { sessionId }); sshSessions.delete(sessionId); conn.end() })
-      resolve({ ok: true })
+      stream.on('data', (chunk) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        broadcast('ssh:data', {
+          sessionId,
+          data: buffer.toString('utf8'),
+          dataBase64: buffer.toString('base64'),
+        })
+      })
+      stream.on('close', () => {
+        broadcast('ssh:close', { sessionId })
+        const active = sshSessions.get(sessionId)
+        if (active?.conn === conn) {
+          sshSessions.delete(sessionId)
+        }
+        conn.end()
+      })
+      finish({ ok: true })
     })
-  }).on('error', (err) => { broadcast('ssh:error', { sessionId, error: err.message }); resolve({ ok: false, error: err.message }) }).connect(connectConfigFromPayload(payload))
+  }).on('error', (err) => { broadcast('ssh:error', { sessionId, error: err.message }); finish({ ok: false, error: err.message }) }).connect(connectConfigFromPayload(payload))
 }))
 
 ipcMain.handle('ssh:write', async (_event, payload) => {

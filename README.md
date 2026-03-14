@@ -134,20 +134,20 @@ AstraShell/
 
 - 仓库：<https://github.com/getiid/AstraShell>
 - 桌面端安装包：GitHub Releases 附件（`.dmg` / `.exe`）
-- 当前仓库打包版本：`v0.3.0`
-- 当前最新公开版本：`v0.3.0`
+- 当前仓库打包版本：`v0.3.1`
+- 当前最新公开版本：`v0.3.1`
 
 ## 更新源策略（七牛 + GitHub + Gitee）
 
 - 客户端检查更新顺序：`七牛 -> GitHub -> Gitee`
 - 默认七牛更新地址：`https://astra.jitux.com`
 - 如需改成其他目录前缀，可设置环境变量 `ASTRASHELL_UPDATE_BASE_URL`
-- 当前七牛内容将同步到 `v0.3.0`，但 HTTPS 证书配置仍需修复
+- 当前七牛内容将同步到 `v0.3.1`，但 HTTPS 证书配置仍需修复
 - 若要让 Gitee 也可自动更新，需在 Gitee Release 同步上传：
   - `AstraShell-Setup-x.y.z.exe`
   - `AstraShell-Setup-x.y.z.exe.blockmap`
-  - `AstraShell-x.y.z-arm64.dmg`
-  - `AstraShell-x.y.z-arm64-mac.zip`
+  - `AstraShell-x.y.z.dmg`
+  - `AstraShell-x.y.z-mac.zip`
   - `latest.yml`
   - `latest-mac.yml`
 

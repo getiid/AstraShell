@@ -14,6 +14,7 @@ const ALL_CATEGORY = '全部'
 const LEGACY_SNIPPET_STORAGE_KEY = 'astrashell.snippets.v1'
 const SNIPPET_DEFAULT_CATEGORY = '部署'
 const SNIPPET_ALL_CATEGORY = '全部'
+const TERMINAL_ENCODING_STORAGE_KEY = 'astrashell.terminal.encoding'
 
 const sshForm = ref({ host: '', port: 22, username: 'root', password: '' })
 const authType = ref<'password' | 'key'>('password')
@@ -24,8 +25,10 @@ const sshConnected = ref(false)
 const focusTerminal = ref(false)
 
 type LocalSSHConfig = { host: string; port?: number; username: string; password?: string; privateKey?: string }
-const sshTabs = ref<Array<{ id: string; name: string; connected: boolean }>>([{ id: 'default', name: '会话-1', connected: false }])
-const sshBuffers = ref<Record<string, string>>({ default: '' })
+type SshTab = { id: string; name: string; connected: boolean }
+const sshTabs = ref<SshTab[]>([{ id: 'default', name: '会话-1', connected: false }])
+const SSH_BUFFER_MAX_CHARS = 240000
+const sshBufferBySession = new Map<string, string>([['default', '']])
 
 const hostName = ref('')
 const hostCategory = ref(DEFAULT_CATEGORY)
@@ -386,6 +389,9 @@ const snippetExtraCategories = ref<string[]>([])
 const newSnippetCategoryName = ref('')
 const newSnippetCategoryInputVisible = ref(false)
 const terminalSnippetId = ref('')
+type TerminalEncoding = 'utf-8' | 'gb18030'
+const terminalEncoding = ref<TerminalEncoding>('utf-8')
+const terminalDecoders = new Map<string, TextDecoder>()
 
 const storageDbPath = ref('')
 const storageFolderInput = ref('')
@@ -423,6 +429,155 @@ watch(snippetItems, (items) => {
   }
 }, { immediate: true })
 
+const normalizeTerminalEncoding = (value: unknown): TerminalEncoding => (
+  value === 'gb18030' ? 'gb18030' : 'utf-8'
+)
+
+const loadTerminalEncoding = () => {
+  try {
+    terminalEncoding.value = normalizeTerminalEncoding(localStorage.getItem(TERMINAL_ENCODING_STORAGE_KEY))
+  } catch {
+    terminalEncoding.value = 'utf-8'
+  }
+}
+
+watch(terminalEncoding, (value) => {
+  terminalDecoders.clear()
+  try { localStorage.setItem(TERMINAL_ENCODING_STORAGE_KEY, value) } catch {}
+})
+
+const decoderCacheKey = (sessionId: string) => `${sessionId}::${terminalEncoding.value}`
+
+const getTerminalDecoder = (sessionId: string) => {
+  const key = decoderCacheKey(sessionId)
+  const existing = terminalDecoders.get(key)
+  if (existing) return existing
+  const decoder = new TextDecoder(terminalEncoding.value)
+  terminalDecoders.set(key, decoder)
+  return decoder
+}
+
+const clearSessionDecoders = (sessionId: string) => {
+  const prefix = `${sessionId}::`
+  for (const key of [...terminalDecoders.keys()]) {
+    if (key.startsWith(prefix)) terminalDecoders.delete(key)
+  }
+}
+
+const decodeBase64Bytes = (base64: string) => {
+  try {
+    const raw = atob(base64)
+    const bytes = new Uint8Array(raw.length)
+    for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i)
+    return bytes
+  } catch {
+    return null
+  }
+}
+
+const decodeSshPayload = (msg: { sessionId?: string; data?: string; dataBase64?: string }) => {
+  const sessionId = String(msg?.sessionId || '')
+  const rawText = String(msg?.data || '')
+  const base64 = String(msg?.dataBase64 || '')
+  if (!sessionId || !base64) return rawText
+  const bytes = decodeBase64Bytes(base64)
+  if (!bytes) return rawText
+  try {
+    return getTerminalDecoder(sessionId).decode(bytes, { stream: true })
+  } catch {
+    return rawText
+  }
+}
+
+const saveSshTabs = () => {
+  try {
+    const snapshot = sshTabs.value.map((tab) => ({ id: tab.id, name: tab.name }))
+    localStorage.setItem('lightterm.sshTabs', JSON.stringify(snapshot))
+  } catch {}
+}
+
+const ensureSshBuffer = (sessionId: string) => {
+  if (!sessionId) return
+  if (sshBufferBySession.has(sessionId)) return
+  sshBufferBySession.set(sessionId, '')
+}
+
+const getSshBuffer = (sessionId: string) => sshBufferBySession.get(sessionId) || ''
+
+const appendSshBuffer = (sessionId: string, text: string) => {
+  ensureSshBuffer(sessionId)
+  if (!text) return
+  const prev = sshBufferBySession.get(sessionId) || ''
+  if (prev.length + text.length <= SSH_BUFFER_MAX_CHARS) {
+    sshBufferBySession.set(sessionId, prev + text)
+    return
+  }
+  const merged = (prev + text).slice(-SSH_BUFFER_MAX_CHARS)
+  sshBufferBySession.set(sessionId, merged)
+}
+
+const renderActiveSshBuffer = () => {
+  if (!terminal) return
+  const text = getSshBuffer(sshSessionId.value)
+  terminal.reset()
+  if (text) terminal.write(text)
+  terminal.focus()
+}
+
+const buildSessionId = () => `ssh-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+
+const switchSshTab = (sessionId: string) => {
+  const tab = sshTabs.value.find((item) => item.id === sessionId)
+  if (!tab) return
+  sshSessionId.value = tab.id
+  sshConnected.value = !!tab.connected
+  ensureSshBuffer(tab.id)
+  renderActiveSshBuffer()
+}
+
+const createSshTab = (name = '新会话') => {
+  const id = buildSessionId()
+  sshTabs.value = [...sshTabs.value, { id, name, connected: false }]
+  ensureSshBuffer(id)
+  sshSessionId.value = id
+  sshConnected.value = false
+  saveSshTabs()
+  renderActiveSshBuffer()
+  return id
+}
+
+const closeSshTab = async (sessionId: string) => {
+  const tabs = sshTabs.value
+  const targetIndex = tabs.findIndex((item) => item.id === sessionId)
+  if (targetIndex === -1) return
+
+  await window.lightterm.sshDisconnect({ sessionId })
+  clearSessionDecoders(sessionId)
+
+  const nextTabs = tabs.filter((item) => item.id !== sessionId)
+  sshBufferBySession.delete(sessionId)
+
+  if (nextTabs.length === 0) {
+    sshTabs.value = [{ id: 'default', name: '会话-1', connected: false }]
+    sshBufferBySession.clear()
+    sshBufferBySession.set('default', '')
+    sshSessionId.value = 'default'
+    sshConnected.value = false
+    saveSshTabs()
+    renderActiveSshBuffer()
+    return
+  }
+
+  sshTabs.value = nextTabs
+  const fallbackIndex = Math.max(0, targetIndex - 1)
+  const nextActive = nextTabs[fallbackIndex] || nextTabs[0]
+  if (!nextActive) return
+  sshSessionId.value = nextActive.id
+  sshConnected.value = !!nextActive.connected
+  saveSshTabs()
+  renderActiveSshBuffer()
+}
+
 const initTerminal = () => {
   if (!termEl.value || terminal) return
   terminal = new Terminal({
@@ -447,12 +602,17 @@ const initTerminal = () => {
 
   terminal.onData((data) => sshConnected.value && window.lightterm.sshWrite({ sessionId: sshSessionId.value, data }))
   window.lightterm.onSshData((msg) => {
-    sshBuffers.value[msg.sessionId] = (sshBuffers.value[msg.sessionId] || '') + msg.data
-    if (msg.sessionId === sshSessionId.value) terminal?.write(msg.data)
+    const sessionId = String(msg?.sessionId || '')
+    if (!sessionId) return
+    const text = decodeSshPayload(msg)
+    appendSshBuffer(sessionId, text)
+    if (sessionId === sshSessionId.value) terminal?.write(text)
   })
   window.lightterm.onSshClose((msg) => {
     const tab = sshTabs.value.find((t) => t.id === msg.sessionId)
     if (tab) tab.connected = false
+    saveSshTabs()
+    clearSessionDecoders(msg.sessionId)
     if (msg.sessionId === sshSessionId.value) {
       sshConnected.value = false
       terminal?.writeln('\r\n[SSH 已断开]')
@@ -465,15 +625,18 @@ const initTerminal = () => {
 const restoreSshTabs = () => {
   try {
     const raw = localStorage.getItem('lightterm.sshTabs')
-    if (!raw) return
+    if (!raw) {
+      ensureSshBuffer(sshSessionId.value)
+      return
+    }
     const parsed = JSON.parse(raw) as Array<{ id: string; name: string }>
     if (!Array.isArray(parsed) || parsed.length === 0) return
     sshTabs.value = parsed.map((p) => ({ ...p, connected: false }))
     const first = sshTabs.value[0]
     if (first) sshSessionId.value = first.id
-    const buffers: Record<string, string> = {}
-    sshTabs.value.forEach((t) => (buffers[t.id] = ''))
-    sshBuffers.value = buffers
+    sshBufferBySession.clear()
+    sshTabs.value.forEach((t) => sshBufferBySession.set(t.id, ''))
+    ensureSshBuffer(sshSessionId.value)
   } catch {}
 }
 
@@ -906,12 +1069,12 @@ const connectSSH = async (optionsOrEvent?: { keepNav?: boolean } | Event) => {
   if (authType.value === 'key') {
     if (!selectedKeyRef.value) {
       sshStatus.value = '请先选择密钥'
-      return
+      return false
     }
     const keyRes = await window.lightterm.vaultKeyGet({ id: selectedKeyRef.value })
     if (!keyRes.ok) {
       sshStatus.value = `读取密钥失败：${keyRes.error}`
-      return
+      return false
     }
     privateKey = keyRes.item?.privateKey || ''
   }
@@ -924,13 +1087,29 @@ const connectSSH = async (optionsOrEvent?: { keepNav?: boolean } | Event) => {
   })
   sshConnected.value = !!res.ok
   const tab = sshTabs.value.find((t) => t.id === sshSessionId.value)
-  if (tab) tab.connected = !!res.ok
+  if (tab) {
+    tab.connected = !!res.ok
+    if (res.ok) {
+      const label = (hostName.value || sshForm.value.host || tab.name || '会话').trim()
+      tab.name = label
+    }
+  }
+  saveSshTabs()
   sshStatus.value = res.ok ? 'SSH 交互会话已连接' : `SSH 连接失败：${res.error}`
   if (res.ok) {
     terminal?.writeln('\r\n[SSH 已连接，可直接输入命令]')
     focusTerminal.value = true
     if (!keepNav) nav.value = 'hosts'
   }
+  return !!res.ok
+}
+
+const connectSSHFromHosts = async () => {
+  if (sshConnected.value) {
+    const label = (hostName.value || sshForm.value.host || '新会话').trim()
+    createSshTab(label)
+  }
+  await connectSSH()
 }
 
 const setHostProbeState = (hostId: string, state: HostProbeState, detail = '') => {
@@ -1084,7 +1263,9 @@ const openHostEditor = (h: any) => {
 
 const openHostTerminal = async (h: any) => {
   useHost(h)
-  await connectSSH()
+  const tabId = createSshTab((h?.name || h?.host || '新会话').trim())
+  const ok = await connectSSH()
+  if (!ok) await closeSshTab(tabId)
 }
 const saveEditedHost = async () => {
   if (!editingHost.value) return
@@ -2022,6 +2203,7 @@ onMounted(async () => {
   }
 
   restoreSshTabs()
+  loadTerminalEncoding()
   initTerminal()
 
   const startupTasks: Array<[string, () => Promise<unknown>]> = [
@@ -2076,7 +2258,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="layout" :class="{ 'terminal-layout': focusTerminal }">
     <aside class="sidebar">
-      <div class="brand"><img src="/logo-astrashell.svg?v=4" alt="AstraShell" class="brand-logo" /> AstraShell</div>
+      <div class="brand"><img src="/logo-astrashell.svg?v=7" alt="AstraShell" class="brand-logo" /> AstraShell</div>
       <ul class="sidebar-nav">
         <li :class="{ active: nav === 'hosts' }" @click="focusTerminal = false; nav = 'hosts'"><Server :size="16" /> 主机管理</li>
         <li :class="{ active: nav === 'sftp' }" @click="focusTerminal = false; nav = 'sftp'"><FolderTree :size="16" /> 文件传输</li>
@@ -2086,7 +2268,7 @@ onBeforeUnmount(() => {
         <li :class="{ active: nav === 'settings' }" @click="focusTerminal = false; nav = 'settings'"><Settings :size="16" /> 应用设置</li>
       </ul>
       <div class="sidebar-footer">
-        <img src="/logo-astrashell.svg?v=4" alt="AstraShell Logo" class="sidebar-footer-logo" />
+        <img src="/logo-astrashell.svg?v=7" alt="AstraShell Logo" class="sidebar-footer-logo" />
         <div class="sidebar-footer-text">
           <div class="sidebar-footer-title">AstraShell</div>
           <div class="sidebar-footer-sub">制作人：GetIDC</div>
@@ -2096,22 +2278,42 @@ onBeforeUnmount(() => {
 
     <main class="main">
       <div class="top-actions terminal-top-actions" v-if="focusTerminal">
-        <div class="terminal-tools-left">
-          <button class="ghost" @click="focusTerminal = false">返回模块视图</button>
-          <button class="ghost" @click="selectAllTerminal">全选</button>
-          <button class="ghost" @click="copyTerminalSelection">复制选中</button>
-          <button class="ghost" @click="pasteToTerminal">粘贴</button>
+        <div class="terminal-tabs">
+          <div
+            class="terminal-tab"
+            v-for="tab in sshTabs"
+            :key="tab.id"
+            :class="{ active: sshSessionId === tab.id }"
+            @click="switchSshTab(tab.id)"
+          >
+            <span class="terminal-tab-name">{{ tab.name }}</span>
+            <span class="status-dot" :class="tab.connected ? 'online' : 'offline'"></span>
+            <button class="terminal-tab-close" title="关闭并断开" @click.stop="closeSshTab(tab.id)">×</button>
+          </div>
+          <button class="ghost small" @click="createSshTab()">+ 新标签</button>
         </div>
-        <div class="terminal-tools-right">
-          <select v-model="terminalSnippetId">
-            <option value="">选择代码片段</option>
-            <option v-for="item in terminalSnippetItems" :key="item.id" :value="item.id">
-              {{ item.name }} · {{ item.category }}
-            </option>
-          </select>
-          <button class="muted" @click="runTerminalSnippet" :disabled="snippetRunning">执行片段</button>
-          <button class="ghost" @click="sendSnippetRawToTerminal">发送原文</button>
-          <button class="ghost" @click="nav = 'snippets'; focusTerminal = false">打开片段</button>
+        <div class="terminal-actions-row">
+          <div class="terminal-tools-left">
+            <button class="ghost" @click="focusTerminal = false">返回模块视图</button>
+            <button class="ghost" @click="selectAllTerminal">全选</button>
+            <button class="ghost" @click="copyTerminalSelection">复制选中</button>
+            <button class="ghost" @click="pasteToTerminal">粘贴</button>
+          </div>
+          <div class="terminal-tools-right">
+            <select v-model="terminalEncoding" class="encoding-select" title="终端解码">
+              <option value="utf-8">终端编码：UTF-8</option>
+              <option value="gb18030">终端编码：GBK/GB18030</option>
+            </select>
+            <select v-model="terminalSnippetId">
+              <option value="">选择代码片段</option>
+              <option v-for="item in terminalSnippetItems" :key="item.id" :value="item.id">
+                {{ item.name }} · {{ item.category }}
+              </option>
+            </select>
+            <button class="muted" @click="runTerminalSnippet" :disabled="snippetRunning">执行片段</button>
+            <button class="ghost" @click="sendSnippetRawToTerminal">发送原文</button>
+            <button class="ghost" @click="nav = 'snippets'; focusTerminal = false">打开片段</button>
+          </div>
         </div>
       </div>
 
@@ -2128,7 +2330,7 @@ onBeforeUnmount(() => {
             <input v-model="sshForm.username" placeholder="用户名" />
             <input v-model="sshForm.password" type="password" placeholder="密码（可选）" />
             <button class="ghost small" @click="saveCurrentHost">保存</button>
-            <button class="muted small" @click="connectSSH">连接</button>
+            <button class="muted small" @click="connectSSHFromHosts">连接</button>
           </div>
         </div>
 
@@ -2225,7 +2427,7 @@ onBeforeUnmount(() => {
                     <div class="module-title">操作</div>
                     <div class="ssh-actions">
                       <button @click="saveEditedHost">保存修改</button>
-                      <button class="muted" @click="useHost(editingHost); connectSSH()">连接终端</button>
+                      <button class="muted" @click="openHostTerminal(editingHost)">连接终端</button>
                       <button class="danger" @click="selectedHostId = editingHost.id; deleteCurrentHost()">删除主机</button>
                     </div>
                   </div>
@@ -2670,10 +2872,18 @@ onBeforeUnmount(() => {
 .sidebar-footer-sub { font-size: 11px; color: #64748b; }
 .main { padding: 12px; padding-bottom: 42px; display: flex; flex-direction: column; gap: 10px; height: 100vh; overflow: hidden; }
 .top-actions { flex-shrink: 0; }
-.terminal-top-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #f5f8fc; border: 1px solid #dbe3ee; border-radius: 12px; padding: 8px 10px; }
+.terminal-top-actions { display: flex; flex-direction: column; gap: 8px; background: #f5f8fc; border: 1px solid #dbe3ee; border-radius: 12px; padding: 8px 10px; }
+.terminal-actions-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.terminal-tabs { display: flex; align-items: center; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+.terminal-tab { display: inline-flex; align-items: center; gap: 8px; max-width: 240px; background: #e8edf6; border: 1px solid #d4dde9; border-radius: 999px; padding: 4px 10px; cursor: pointer; }
+.terminal-tab.active { background: #dbeafe; border-color: #93c5fd; }
+.terminal-tab-name { max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: #0f172a; }
+.terminal-tab-close { border: none; background: transparent; color: #64748b; font-size: 15px; line-height: 1; padding: 0 2px; min-width: auto; cursor: pointer; }
+.terminal-tab-close:hover { color: #ef4444; }
 .terminal-tools-left,
 .terminal-tools-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .terminal-tools-right { margin-left: auto; }
+.terminal-tools-right .encoding-select { min-width: 180px; }
 .terminal-tools-right select { min-width: 220px; max-width: 360px; }
 .topbar,.panel,.terminal-wrap { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 10px; }
 .topbar { display: flex; align-items: center; justify-content: space-between; padding-left: 110px; min-height: 42px; -webkit-app-region: drag; flex-shrink: 0; }
@@ -2924,9 +3134,10 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
   .snippets-left { display: none; }
   .hosts-quick-connect { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hosts-quick-connect button { grid-column: span 1; }
-  .terminal-top-actions { flex-direction: column; align-items: stretch; }
+  .terminal-actions-row { flex-direction: column; align-items: stretch; }
   .terminal-tools-right { margin-left: 0; }
   .terminal-tools-right select { min-width: 0; width: 100%; max-width: none; }
+  .terminal-tab { max-width: 180px; }
   .snippets-header { flex-direction: column; align-items: flex-start; }
   .snippets-run-settings input { width: 100%; }
   .vault-toolbar { grid-template-columns: 1fr 1fr; }
