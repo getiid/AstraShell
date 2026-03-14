@@ -2258,7 +2258,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="layout" :class="{ 'terminal-layout': focusTerminal }">
     <aside class="sidebar">
-      <div class="brand"><img src="/logo-astrashell.svg?v=7" alt="AstraShell" class="brand-logo" /> AstraShell</div>
+      <div class="brand"><img src="/logo-astrashell.svg?v=8" alt="AstraShell" class="brand-logo" /> AstraShell</div>
       <ul class="sidebar-nav">
         <li :class="{ active: nav === 'hosts' }" @click="focusTerminal = false; nav = 'hosts'"><Server :size="16" /> 主机管理</li>
         <li :class="{ active: nav === 'sftp' }" @click="focusTerminal = false; nav = 'sftp'"><FolderTree :size="16" /> 文件传输</li>
@@ -2268,7 +2268,7 @@ onBeforeUnmount(() => {
         <li :class="{ active: nav === 'settings' }" @click="focusTerminal = false; nav = 'settings'"><Settings :size="16" /> 应用设置</li>
       </ul>
       <div class="sidebar-footer">
-        <img src="/logo-astrashell.svg?v=7" alt="AstraShell Logo" class="sidebar-footer-logo" />
+        <img src="/logo-astrashell.svg?v=8" alt="AstraShell Logo" class="sidebar-footer-logo" />
         <div class="sidebar-footer-text">
           <div class="sidebar-footer-title">AstraShell</div>
           <div class="sidebar-footer-sub">制作人：GetIDC</div>

@@ -12,8 +12,6 @@
     </filter>
   </defs>
 
-  <rect width="1024" height="1024" fill="#F5F6F8"/>
-
   <g filter="url(#tileShadow)">
     <rect x="140" y="140" width="744" height="744" rx="136" fill="#E9EAED"/>
     <rect x="146" y="146" width="732" height="732" rx="130" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="4"/>
