@@ -1,7 +1,9 @@
 {
   "name": "astrashell-desktop",
   "private": true,
-  "version": "0.2.14",
+  "version": "0.3.0",
+  "description": "AstraShell desktop terminal for SSH, SFTP, snippets, serial tools and key vault.",
+  "author": "Jonny",
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
@@ -53,25 +55,57 @@
     "mac": {
       "identity": null,
       "hardenedRuntime": false,
+      "icon": "build/icons/icon.icns",
       "target": [
         "dmg",
         "zip"
       ],
       "category": "public.app-category.developer-tools"
     },
+    "dmg": {
+      "contents": [
+        {
+          "x": 160,
+          "y": 220
+        },
+        {
+          "x": 434,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 297,
+          "y": 420,
+          "type": "file",
+          "path": "build/AstraShell Repair.command"
+        }
+      ]
+    },
     "win": {
+      "icon": "build/icons/icon.ico",
       "target": [
-        "nsis"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "oneClick": true,
       "perMachine": false,
       "allowElevation": true,
       "deleteAppDataOnUninstall": true,
+      "installerIcon": "build/icons/icon.ico",
+      "uninstallerIcon": "build/icons/icon.ico",
+      "installerHeaderIcon": "build/icons/icon.ico",
       "include": "build/installer.nsh"
     },
     "linux": {
+      "icon": "build/icons/icon.png",
       "target": [
         "AppImage"
       ],

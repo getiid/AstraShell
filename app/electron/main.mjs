@@ -700,8 +700,8 @@ function pickMirrorAsset(assets, latestVersion) {
   const lowerRows = rows.map((row) => ({ ...row, lower: row.name.toLowerCase() }))
 
   if (process.platform === 'win32') {
-    const exact = lowerRows.find((row) => row.lower === `astrashell-setup-${version}.exe`)
-    if (exact) return exact
+    const exactSetup = lowerRows.find((row) => row.lower === `astrashell-setup-${version}.exe`)
+    if (exactSetup) return exactSetup
     const fuzzy = lowerRows.find((row) => row.lower.endsWith('.exe') && !row.lower.endsWith('.blockmap'))
     return fuzzy || null
   }

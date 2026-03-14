@@ -1,0 +1,171 @@
+<svg width="1215" height="768" viewBox="0 0 1215 768" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1215" height="768" rx="20" fill="#D9DEE5"/>
+  <rect x="1" y="1" width="1213" height="766" rx="19" fill="#F3F5F8" stroke="#CBD3DD"/>
+  <circle cx="22" cy="20" r="7" fill="#FF5F57"/>
+  <circle cx="40" cy="20" r="7" fill="#FEBC2E"/>
+  <circle cx="58" cy="20" r="7" fill="#28C840"/>
+  <text x="80" y="25" fill="#4B5563" font-family="Arial, sans-serif" font-size="14" font-weight="700">AstraShell</text>
+
+  <rect x="0" y="33" width="195" height="735" fill="#EFF2F6"/>
+  <g>
+    <path d="M37 49L47 69H27L37 49Z" fill="#2970F6"/>
+    <path d="M37 58L44 71H30L37 58Z" fill="#9CC0FF"/>
+    <text x="64" y="66" fill="#111827" font-family="Arial, sans-serif" font-size="20" font-weight="700">AstraShell</text>
+  </g>
+
+  <rect x="14" y="97" width="133" height="34" rx="10" fill="#CFE0FF"/>
+  <text x="43" y="119" fill="#2349B6" font-family="Arial, sans-serif" font-size="15" font-weight="700">Hosts</text>
+  <g fill="#1F2937" font-family="Arial, sans-serif" font-size="14">
+    <text x="43" y="159">SFTP</text>
+    <text x="43" y="199">Snippets</text>
+    <text x="43" y="239">Serial</text>
+    <text x="43" y="279">Vault</text>
+    <text x="43" y="319">Settings</text>
+  </g>
+  <g stroke="#6B7280" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="25" y="106" width="10" height="4" rx="2"/>
+    <rect x="25" y="114" width="10" height="4" rx="2"/>
+    <path d="M25 154H35M25 161H35"/>
+    <path d="M25 193L33 185M26 194L33 201"/>
+    <path d="M27 234C27 229 31 227 35 227C39 227 43 229 43 234C43 239 39 241 35 241C31 241 27 239 27 234Z"/>
+    <path d="M25 275C25 271 28 268 32 268H38C42 268 45 271 45 275V282H25V275Z"/>
+    <path d="M25 315L30 310L35 315L40 310L45 315L40 320L45 325L40 330L35 325L30 330L25 325L30 320L25 315Z"/>
+  </g>
+
+  <rect x="207" y="42" width="995" height="687" rx="12" fill="#C9D1DB"/>
+  <text x="218" y="63" fill="#111827" font-family="Arial, sans-serif" font-size="16" font-weight="700">Host Manager</text>
+  <text x="218" y="79" fill="#6B7280" font-family="Arial, sans-serif" font-size="11">Quick connect on the left, edit details on the right.</text>
+
+  <rect x="219" y="106" width="239" height="34" rx="8" fill="#F8FAFC" stroke="#C8D0DA"/>
+  <rect x="464" y="106" width="213" height="34" rx="8" fill="#F8FAFC" stroke="#C8D0DA"/>
+  <rect x="683" y="106" width="81" height="34" rx="8" fill="#F8FAFC" stroke="#C8D0DA"/>
+  <rect x="772" y="106" width="107" height="34" rx="8" fill="#F8FAFC" stroke="#C8D0DA"/>
+  <rect x="885" y="106" width="215" height="34" rx="8" fill="#F8FAFC" stroke="#C8D0DA"/>
+  <rect x="1107" y="107" width="35" height="32" rx="8" fill="#ECEFF4" stroke="#D5DCE5"/>
+  <rect x="1149" y="107" width="39" height="32" rx="8" fill="#5D6477"/>
+
+  <rect x="223" y="153" width="149" height="568" rx="12" fill="#D6DCE4"/>
+  <text x="228" y="178" fill="#374151" font-family="Arial, sans-serif" font-size="13" font-weight="700">Groups</text>
+  <rect x="317" y="162" width="45" height="22" rx="8" fill="#EFF2F6" stroke="#CAD2DC"/>
+  <text x="329" y="177" fill="#374151" font-family="Arial, sans-serif" font-size="11" font-weight="700">+ New</text>
+
+  <rect x="229" y="194" width="135" height="34" rx="8" fill="#EFF5FF" stroke="#5A87FF" stroke-width="2"/>
+  <rect x="229" y="236" width="135" height="34" rx="8" fill="#EEF2F6" stroke="#C6CED8"/>
+  <rect x="229" y="278" width="135" height="34" rx="8" fill="#EEF2F6" stroke="#C6CED8"/>
+  <rect x="229" y="320" width="135" height="34" rx="8" fill="#EEF2F6" stroke="#C6CED8"/>
+  <rect x="229" y="362" width="135" height="34" rx="8" fill="#EEF2F6" stroke="#C6CED8"/>
+  <rect x="229" y="404" width="135" height="34" rx="8" fill="#EEF2F6" stroke="#C6CED8"/>
+  <rect x="229" y="446" width="135" height="34" rx="8" fill="#EEF2F6" stroke="#C6CED8"/>
+  <g fill="#1F2937" font-family="Arial, sans-serif" font-size="12" font-weight="700">
+    <text x="240" y="216">All</text>
+    <text x="240" y="258">Default</text>
+    <text x="240" y="300">Lanzhou</text>
+    <text x="240" y="342">Study</text>
+    <text x="240" y="384">Home</text>
+    <text x="240" y="426">Water</text>
+    <text x="240" y="468">Kunming</text>
+  </g>
+
+  <rect x="386" y="153" width="808" height="568" rx="12" fill="#CBD3DD" stroke="#B7C1CC"/>
+  <rect x="400" y="167" width="671" height="25" rx="6" fill="#F8FAFC" stroke="#C8D0DA"/>
+  <text x="1080" y="184" fill="#4B5563" font-family="Arial, sans-serif" font-size="11">10 / 10</text>
+
+  <g>
+    <rect x="400" y="210" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+    <rect x="654" y="210" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+    <rect x="908" y="210" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+    <rect x="400" y="280" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+    <rect x="654" y="280" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+    <rect x="908" y="280" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+    <rect x="400" y="350" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+    <rect x="654" y="350" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+    <rect x="908" y="350" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+    <rect x="400" y="420" width="246" height="62" rx="10" fill="#F7F9FC" stroke="#D4DBE4"/>
+  </g>
+
+  <g fill="#111827">
+    <rect x="416" y="232" width="12" height="8" rx="2"/>
+    <rect x="416" y="302" width="12" height="8" rx="2"/>
+    <rect x="416" y="372" width="12" height="8" rx="2"/>
+    <rect x="416" y="442" width="12" height="8" rx="2" fill="#C7931A"/>
+    <rect x="670" y="232" width="12" height="8" rx="2"/>
+    <rect x="670" y="302" width="12" height="8" rx="2"/>
+    <rect x="670" y="372" width="12" height="8" rx="2"/>
+    <rect x="924" y="232" width="12" height="8" rx="2"/>
+    <rect x="924" y="302" width="12" height="8" rx="2"/>
+    <rect x="924" y="372" width="12" height="8" rx="2" fill="#C7931A"/>
+  </g>
+
+  <g fill="#DCE3EC">
+    <rect x="444" y="223" width="82" height="11" rx="5"/>
+    <rect x="444" y="239" width="96" height="8" rx="4"/>
+    <rect x="444" y="251" width="74" height="8" rx="4"/>
+    <rect x="698" y="223" width="70" height="11" rx="5"/>
+    <rect x="698" y="239" width="92" height="8" rx="4"/>
+    <rect x="698" y="251" width="60" height="8" rx="4"/>
+    <rect x="952" y="223" width="86" height="11" rx="5"/>
+    <rect x="952" y="239" width="94" height="8" rx="4"/>
+    <rect x="952" y="251" width="66" height="8" rx="4"/>
+    <rect x="444" y="293" width="96" height="11" rx="5"/>
+    <rect x="444" y="309" width="88" height="8" rx="4"/>
+    <rect x="444" y="321" width="70" height="8" rx="4"/>
+    <rect x="698" y="293" width="78" height="11" rx="5"/>
+    <rect x="698" y="309" width="82" height="8" rx="4"/>
+    <rect x="698" y="321" width="62" height="8" rx="4"/>
+    <rect x="952" y="293" width="66" height="11" rx="5"/>
+    <rect x="952" y="309" width="80" height="8" rx="4"/>
+    <rect x="952" y="321" width="58" height="8" rx="4"/>
+    <rect x="444" y="363" width="88" height="11" rx="5"/>
+    <rect x="444" y="379" width="90" height="8" rx="4"/>
+    <rect x="444" y="391" width="68" height="8" rx="4"/>
+    <rect x="698" y="363" width="72" height="11" rx="5"/>
+    <rect x="698" y="379" width="94" height="8" rx="4"/>
+    <rect x="698" y="391" width="66" height="8" rx="4"/>
+    <rect x="952" y="363" width="74" height="11" rx="5"/>
+    <rect x="952" y="379" width="84" height="8" rx="4"/>
+    <rect x="952" y="391" width="62" height="8" rx="4"/>
+    <rect x="444" y="433" width="76" height="11" rx="5"/>
+    <rect x="444" y="449" width="88" height="8" rx="4"/>
+    <rect x="444" y="461" width="64" height="8" rx="4"/>
+  </g>
+
+  <g>
+    <rect x="554" y="225" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="602" cy="236" r="4" fill="#FF6B6B"/>
+    <rect x="618" y="224" width="7" height="18" rx="3" fill="#C8D0DA"/>
+    <rect x="808" y="225" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="856" cy="236" r="4" fill="#36C275"/>
+    <rect x="872" y="224" width="7" height="18" rx="3" fill="#C8D0DA"/>
+    <rect x="1062" y="225" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="1110" cy="236" r="4" fill="#36C275"/>
+    <rect x="1126" y="224" width="7" height="18" rx="3" fill="#C8D0DA"/>
+
+    <rect x="554" y="295" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="602" cy="306" r="4" fill="#FF6B6B"/>
+    <rect x="618" y="294" width="7" height="18" rx="3" fill="#C8D0DA"/>
+    <rect x="808" y="295" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="856" cy="306" r="4" fill="#36C275"/>
+    <rect x="872" y="294" width="7" height="18" rx="3" fill="#C8D0DA"/>
+    <rect x="1062" y="295" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="1110" cy="306" r="4" fill="#36C275"/>
+    <rect x="1126" y="294" width="7" height="18" rx="3" fill="#C8D0DA"/>
+
+    <rect x="554" y="365" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="602" cy="376" r="4" fill="#36C275"/>
+    <rect x="618" y="364" width="7" height="18" rx="3" fill="#C8D0DA"/>
+    <rect x="808" y="365" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="856" cy="376" r="4" fill="#36C275"/>
+    <rect x="872" y="364" width="7" height="18" rx="3" fill="#C8D0DA"/>
+    <rect x="1062" y="365" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="1110" cy="376" r="4" fill="#36C275"/>
+    <rect x="1126" y="364" width="7" height="18" rx="3" fill="#C8D0DA"/>
+
+    <rect x="554" y="435" width="22" height="8" rx="4" fill="#E2E8F0"/>
+    <circle cx="602" cy="446" r="4" fill="#36C275"/>
+    <rect x="618" y="434" width="7" height="18" rx="3" fill="#C8D0DA"/>
+  </g>
+
+  <rect x="0" y="736" width="1215" height="32" rx="8" fill="#F3F5F8" stroke="#C7CFD9"/>
+  <text x="12" y="756" fill="#4B5563" font-family="Arial, sans-serif" font-size="12">Status: snippets save fix pending verification on Windows x64 build.</text>
+  <text x="1030" y="756" fill="#4B5563" font-family="Arial, sans-serif" font-size="12">0%</text>
+</svg>

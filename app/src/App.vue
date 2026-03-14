@@ -297,7 +297,7 @@ const terminalSnippetItems = computed(() => {
   })
 })
 
-const syncStatusText = ref('本地版：不走云端账号，同步依赖共享文件夹数据库。')
+const syncStatusText = ref('本地版：不是云同步；同步依赖同一个共享目录里的 lightterm.db 文件。')
 const syncQueueCount = ref(0)
 
 const updateInfo = ref({
@@ -514,6 +514,50 @@ const readLegacySnippets = () => {
   }
 }
 
+const mergeSnippetSources = (
+  remoteItems: SnippetItem[],
+  remoteCategories: string[],
+  legacyItems: SnippetItem[],
+  legacyCategories: string[],
+) => {
+  const merged = [...remoteItems]
+  let changed = false
+
+  for (const item of legacyItems) {
+    const legacyName = String(item?.name || '').trim()
+    const legacyCommands = String(item?.commands || '').trim()
+    if (!legacyName || !legacyCommands) continue
+
+    const index = merged.findIndex((current) => (
+      current.id === item.id
+      || (
+        String(current?.name || '').trim() === legacyName
+        && String(current?.commands || '').trim() === legacyCommands
+      )
+    ))
+
+    if (index === -1) {
+      merged.push({ ...item })
+      changed = true
+      continue
+    }
+
+    if (Number(item.updatedAt || 0) > Number(merged[index]?.updatedAt || 0)) {
+      merged[index] = { ...merged[index], ...item }
+      changed = true
+    }
+  }
+
+  const extraCategories = [...new Set([...remoteCategories, ...legacyCategories].map((value) => String(value || '').trim()).filter(Boolean))]
+  if (extraCategories.length !== remoteCategories.length) changed = true
+
+  return {
+    items: merged.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)),
+    extraCategories,
+    changed,
+  }
+}
+
 const applySnippetState = (items: SnippetItem[], extraCategories: string[]) => {
   snippetItems.value = [...items].sort((a, b) => b.updatedAt - a.updatedAt)
   snippetExtraCategories.value = [...new Set(extraCategories.filter(Boolean))]
@@ -550,17 +594,22 @@ const restoreSnippets = async () => {
 
   const remoteItems = Array.isArray(res.items) ? (res.items as SnippetItem[]) : []
   const remoteCategories = Array.isArray(res.extraCategories) ? res.extraCategories : []
-  if (remoteItems.length > 0 || remoteCategories.length > 0) {
-    applySnippetState(remoteItems, remoteCategories)
+  const legacy = readLegacySnippets()
+  if (legacy && (legacy.items.length > 0 || legacy.extraCategories.length > 0)) {
+    const merged = mergeSnippetSources(remoteItems, remoteCategories, legacy.items, legacy.extraCategories)
+    applySnippetState(merged.items, merged.extraCategories)
+    if (merged.changed || remoteItems.length === 0) {
+      await saveSnippetState(merged.items, merged.extraCategories)
+      snippetStatus.value = remoteItems.length > 0 || remoteCategories.length > 0
+        ? '已合并本机旧版代码片段到共享数据库'
+        : '已迁移本机旧版代码片段到共享数据库'
+    }
+    try { localStorage.removeItem(LEGACY_SNIPPET_STORAGE_KEY) } catch {}
     return
   }
 
-  const legacy = readLegacySnippets()
-  if (legacy && (legacy.items.length > 0 || legacy.extraCategories.length > 0)) {
-    applySnippetState(legacy.items, legacy.extraCategories)
-    await saveSnippetState()
-    try { localStorage.removeItem(LEGACY_SNIPPET_STORAGE_KEY) } catch {}
-    snippetStatus.value = '已迁移本机旧版代码片段到共享数据库'
+  if (remoteItems.length > 0 || remoteCategories.length > 0) {
+    applySnippetState(remoteItems, remoteCategories)
     return
   }
 
@@ -2027,7 +2076,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="layout" :class="{ 'terminal-layout': focusTerminal }">
     <aside class="sidebar">
-      <div class="brand"><img src="/logo-astrashell.png?v=2" alt="AstraShell" class="brand-logo" /> AstraShell</div>
+      <div class="brand"><img src="/logo-astrashell.svg?v=4" alt="AstraShell" class="brand-logo" /> AstraShell</div>
       <ul class="sidebar-nav">
         <li :class="{ active: nav === 'hosts' }" @click="focusTerminal = false; nav = 'hosts'"><Server :size="16" /> 主机管理</li>
         <li :class="{ active: nav === 'sftp' }" @click="focusTerminal = false; nav = 'sftp'"><FolderTree :size="16" /> 文件传输</li>
@@ -2037,7 +2086,7 @@ onBeforeUnmount(() => {
         <li :class="{ active: nav === 'settings' }" @click="focusTerminal = false; nav = 'settings'"><Settings :size="16" /> 应用设置</li>
       </ul>
       <div class="sidebar-footer">
-        <img src="/logo-astrashell.png?v=2" alt="AstraShell Logo" class="sidebar-footer-logo" />
+        <img src="/logo-astrashell.svg?v=4" alt="AstraShell Logo" class="sidebar-footer-logo" />
         <div class="sidebar-footer-text">
           <div class="sidebar-footer-title">AstraShell</div>
           <div class="sidebar-footer-sub">制作人：GetIDC</div>
@@ -2529,7 +2578,7 @@ onBeforeUnmount(() => {
           <button class="muted" @click="refreshLocalSyncOverview">刷新</button>
         </div>
         <p>{{ storageMsg }}</p>
-        <p class="hint">建议：跨设备同步时，只让一台设备在同一时刻写入数据库，避免冲突。</p>
+        <p class="hint">`lightterm.db` 当前是共享 JSON 数据文件，不是云账号同步。Windows 和 mac 都要手动指到同一个云盘/共享目录后再重启应用。</p>
         <div class="divider"></div>
         <h3>共享同步</h3>
         <p>{{ syncStatusText }}</p>
@@ -2541,7 +2590,7 @@ onBeforeUnmount(() => {
           <button class="muted" @click="clearSyncQueue">清空本地队列</button>
         </div>
         <p>待处理变更：{{ syncQueueCount }}</p>
-        <p class="hint">建议：把数据库目录放到 iCloud/OneDrive/共享盘；同一时刻只在一台设备写入。</p>
+        <p class="hint">建议：把数据库目录放到 iCloud/OneDrive/共享盘；两台设备必须指向同一个 `lightterm.db` 文件，同一时刻只在一台设备写入。</p>
       </section>
 
       <section v-else-if="!focusTerminal" class="panel"><h3>模块建设中</h3><p>当前页面：{{ nav }}</p></section>
