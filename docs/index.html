@@ -278,6 +278,7 @@
         </p>
         <div class="cta-row">
           <a id="download-win" class="btn" href="https://github.com/getiid/AstraShell/releases/latest" target="_blank" rel="noopener">下载 Windows 安装包</a>
+          <a id="download-android" class="btn ghost" href="https://github.com/getiid/AstraShell/releases/latest" target="_blank" rel="noopener">下载 Android APK</a>
           <a id="download-mac" class="btn ghost" href="https://github.com/getiid/AstraShell/releases/latest" target="_blank" rel="noopener">下载 macOS 安装包</a>
           <a class="btn ghost" href="https://github.com/getiid/AstraShell/releases/latest" target="_blank" rel="noopener">查看全部发布</a>
           <a class="btn ghost" href="https://github.com/getiid/AstraShell" target="_blank" rel="noopener">GitHub 仓库</a>
@@ -296,7 +297,7 @@
         </article>
         <article class="feature card">
           <h3>轻量但完整</h3>
-          <p>从 SSH 到 SFTP，再到密钥管理和常用脚本片段，开箱即可覆盖日常服务器维护流程。</p>
+          <p>从 SSH 到 SFTP，再到密钥管理和常用脚本片段；桌面端稳定可用，Android APK 也已开放下载体验。</p>
         </article>
         <article class="showcase card">
           <img src="./screenshots/dashboard-2026-03-13.svg" alt="AstraShell 应用截图" />
@@ -323,6 +324,7 @@
       (async () => {
         const status = document.getElementById('release-status');
         const win = document.getElementById('download-win');
+        const android = document.getElementById('download-android');
         const mac = document.getElementById('download-mac');
         const fallback = 'https://github.com/getiid/AstraShell/releases/latest';
         try {
@@ -333,13 +335,16 @@
           const release = await res.json();
           const assets = Array.isArray(release.assets) ? release.assets : [];
           const winAsset = assets.find((a) => String(a.name || '').toLowerCase().endsWith('.exe'));
+          const androidAsset = assets.find((a) => String(a.name || '').toLowerCase().endsWith('.apk'));
           const macAsset = assets.find((a) => String(a.name || '').toLowerCase().endsWith('.dmg'));
 
           win.href = winAsset?.browser_download_url || fallback;
+          android.href = androidAsset?.browser_download_url || fallback;
           mac.href = macAsset?.browser_download_url || fallback;
           status.textContent = `当前最新版本：${release.tag_name || 'unknown'} · 点击按钮可直达下载`;
         } catch (error) {
           win.href = fallback;
+          android.href = fallback;
           mac.href = fallback;
           status.textContent = '未读取到最新版本，已切换到 GitHub Releases 页面下载。';
         }
