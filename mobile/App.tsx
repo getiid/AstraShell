@@ -7,10 +7,10 @@ type HostItem = { id: string; name: string; host: string; port: number; user: st
 
 const categories = ['全部', '生产', '测试', '内网']
 const hostsSeed: HostItem[] = [
-  { id: 'h1', name: '阿里云-生产', host: '47.116.71.153', port: 22, user: 'root', category: '生产', auth: 'password' },
-  { id: 'h2', name: '腾讯云-续费', host: '111.229.123.26', port: 22, user: 'root', category: '生产', auth: 'key' },
-  { id: 'h3', name: '本地路由器', host: '192.168.50.1', port: 22, user: 'admin', category: '内网', auth: 'password' },
-  { id: 'h4', name: '测试环境-Web', host: '10.0.1.9', port: 22, user: 'deploy', category: '测试', auth: 'key' },
+  { id: 'h1', name: '生产集群-A', host: 'prod-a.example.internal', port: 22, user: 'ops', category: '生产', auth: 'password' },
+  { id: 'h2', name: '生产集群-B', host: 'prod-b.example.internal', port: 22, user: 'ops', category: '生产', auth: 'key' },
+  { id: 'h3', name: '办公跳板机', host: 'bastion.office.internal', port: 22, user: 'admin', category: '内网', auth: 'password' },
+  { id: 'h4', name: '预发环境-Web', host: 'staging-web.example.internal', port: 22, user: 'deploy', category: '测试', auth: 'key' },
 ]
 
 const snippetsSeed = [
@@ -18,6 +18,21 @@ const snippetsSeed = [
   { id: 's2', name: '查看系统信息', category: '巡检', cmd: 'uname -a && free -h && df -h' },
   { id: 's3', name: '重启服务', category: '运维', cmd: 'sudo systemctl restart nginx' },
 ]
+
+function maskHost(host: string): string {
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (ipv4) return `${ipv4[1]}.${ipv4[2]}.*.*`
+
+  const parts = host.split('.')
+  if (parts.length > 1) {
+    const head = parts[0] || ''
+    const maskedHead = head.length <= 2 ? `${head.slice(0, 1)}*` : `${head.slice(0, 2)}***`
+    return `${maskedHead}.${parts.slice(1).join('.')}`
+  }
+
+  if (host.length <= 2) return `${host.slice(0, 1)}*`
+  return `${host.slice(0, 2)}***`
+}
 
 function HostsScreen() {
   const [category, setCategory] = useState('全部')
@@ -29,7 +44,7 @@ function HostsScreen() {
       if (!inCategory) return false
       if (!keyword.trim()) return true
       const q = keyword.trim().toLowerCase()
-      return [h.name, h.host, h.user, h.category].some((v) => v.toLowerCase().includes(q))
+      return [h.name, h.host, maskHost(h.host), h.user, h.category].some((v) => v.toLowerCase().includes(q))
     })
   }, [category, keyword])
 
@@ -53,7 +68,7 @@ function HostsScreen() {
       <TextInput
         value={keyword}
         onChangeText={setKeyword}
-        placeholder="搜索主机/IP/用户名"
+        placeholder="搜索主机/别名/用户名"
         placeholderTextColor="#94A3B8"
         style={styles.input}
       />
@@ -66,7 +81,7 @@ function HostsScreen() {
             style={[styles.hostCard, h.id === active?.id ? styles.hostCardActive : null]}
           >
             <Text style={styles.hostTitle}>{h.name}</Text>
-            <Text style={styles.hostMeta}>{`${h.host}:${h.port}`}</Text>
+            <Text style={styles.hostMeta}>{`${maskHost(h.host)}:${h.port}`}</Text>
             <Text style={styles.hostMeta}>{`${h.user} · ${h.category} · ${h.auth}`}</Text>
           </Pressable>
         ))}
@@ -78,7 +93,7 @@ function HostsScreen() {
         {active ? (
           <>
             <Text style={styles.editorLine}>名称：{active.name}</Text>
-            <Text style={styles.editorLine}>地址：{active.host}</Text>
+            <Text style={styles.editorLine}>地址：{`${maskHost(active.host)}:${active.port}`}</Text>
             <Text style={styles.editorLine}>认证：{active.auth === 'key' ? '密钥认证' : '密码认证'}</Text>
             <View style={styles.actionRow}>
               <Pressable style={styles.primaryBtn}>
