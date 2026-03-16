@@ -351,9 +351,7 @@ const updateStatusText = computed(() => {
   const u = updateInfo.value
   const current = u.currentVersion || '-'
   const latest = u.latestVersion || '-'
-  const sourceLabel = u.source === 'qiniu'
-    ? '七牛'
-    : (u.source === 'gitee' ? 'Gitee' : 'GitHub')
+  const sourceLabel = 'GitHub'
   return `当前版本：${current} ｜ 最新版本：${latest} ｜ 更新源：${sourceLabel} ｜ ${u.message || '就绪'}`
 })
 
@@ -2225,6 +2223,20 @@ const refreshStorageOverview = async () => {
   await refreshStorageInfo()
 }
 
+let storageDataRefreshTimer: number | null = null
+const scheduleStorageDataRefresh = () => {
+  if (storageDataRefreshTimer) window.clearTimeout(storageDataRefreshTimer)
+  storageDataRefreshTimer = window.setTimeout(async () => {
+    storageDataRefreshTimer = null
+    if (startupGateVisible.value) return
+    await refreshStorageOverview()
+    await refreshHosts()
+    if (snippetsLoaded.value || nav.value === 'snippets') await restoreSnippets()
+    if (vaultUnlocked.value && (vaultKeysLoaded.value || nav.value === 'vault')) await refreshVaultKeys()
+    storageMsg.value = '检测到共享数据文件更新，已自动刷新'
+  }, 320)
+}
+
 const pickStorageFolder = async () => {
   const res = await window.lightterm.appPickStorageFolder()
   if (res.ok && res.folder) storageFolderInput.value = res.folder
@@ -2326,12 +2338,17 @@ onMounted(async () => {
     if (p.type === 'download') sftpDownloadProgress.value = p.percent
   })
   window.lightterm.onUpdateStatus((payload) => mergeUpdateState(payload))
+  window.lightterm.onStorageDataChanged(() => scheduleStorageDataRefresh())
   window.addEventListener('click', hideAllMenus)
   window.addEventListener('keydown', handleTerminalHotkeys, true)
 })
 
 onBeforeUnmount(() => {
   cancelHostProbe()
+  if (storageDataRefreshTimer) {
+    window.clearTimeout(storageDataRefreshTimer)
+    storageDataRefreshTimer = null
+  }
   window.removeEventListener('keydown', handleTerminalHotkeys, true)
   window.removeEventListener('click', hideAllMenus)
 })

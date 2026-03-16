@@ -1,7 +1,7 @@
 {
   "name": "astrashell-desktop",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "AstraShell desktop terminal for SSH, SFTP, snippets, serial tools and key vault.",
   "author": "Jonny",
   "type": "module",
@@ -14,9 +14,7 @@
     "build": "npm run build:web",
     "preview": "vite preview",
     "start": "electron .",
-    "dist": "npm run build && electron-builder -mwl",
-    "publish:qiniu": "node scripts/qiniu-publish.mjs",
-    "release:qiniu": "bash scripts/release-qiniu.sh"
+    "dist": "npm run build && electron-builder -mwl"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",

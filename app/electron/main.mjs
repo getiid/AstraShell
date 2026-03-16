@@ -31,6 +31,7 @@ let runtimeCleanupReason = ''
 let suppressWindowAllClosedQuit = false
 let macAutoInstallSupport = null
 let activeDbPath = ''
+let dbWatchTimer = null
 const DATA_FILE_NAME = 'astrashell.data.json'
 const LEGACY_DB_FILE_NAME = 'lightterm.db'
 const macManualInstallTip = '当前构建未使用 Developer ID 签名，无法一键安装更新。请从 GitHub Release 下载 DMG 手动覆盖安装。'
@@ -39,10 +40,6 @@ const githubReleaseProvider = {
   owner: 'getiid',
   repo: 'AstraShell',
   releaseType: 'release',
-}
-const giteeMirror = {
-  apiLatest: 'https://gitee.com/api/v5/repos/jitu/AstraShell/releases/latest',
-  releasePage: 'https://gitee.com/jitu/AstraShell/releases',
 }
 
 function checkMacAutoInstallSupport() {
@@ -76,10 +73,6 @@ const updateState = {
   source: 'github',
   downloadUrl: '',
   releaseUrl: '',
-  mirrorTag: '',
-  mirrorDownloadUrl: '',
-  mirrorReleaseUrl: '',
-  mirrorDownloadedFilePath: '',
 }
 
 async function getSSHClientCtor() {
@@ -133,23 +126,7 @@ function writeSettings(next) {
   fs.writeFileSync(p, JSON.stringify(next, null, 2), 'utf8')
 }
 
-function trimTrailingSlash(value) {
-  return String(value || '').trim().replace(/\/+$/, '')
-}
-
-function getQiniuUpdateBaseUrl() {
-  const settings = readSettings()
-  const raw = process.env.ASTRASHELL_UPDATE_BASE_URL
-    || process.env.QINIU_PUBLIC_BASE_URL
-    || settings.updateBaseUrl
-    || 'https://astra.jitux.com'
-  if (!/^https?:\/\//i.test(String(raw || '').trim())) return ''
-  return trimTrailingSlash(raw)
-}
-
 function getUpdateSourceLabel(source) {
-  if (source === 'qiniu') return '七牛'
-  if (source === 'gitee') return 'Gitee'
   return 'GitHub'
 }
 
@@ -302,6 +279,7 @@ function migrateLegacyDbFileIfNeeded(targetPath) {
 class JsonDB {
   constructor(filePath) {
     this.filePath = filePath
+    this.lastFileMtimeMs = 0
     this.data = {
       hosts: [],
       snippets: [],
@@ -313,16 +291,52 @@ class JsonDB {
   }
 
   load() {
-    if (!fs.existsSync(this.filePath)) return
+    if (!fs.existsSync(this.filePath)) {
+      this.lastFileMtimeMs = 0
+      return
+    }
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8')
       const parsed = JSON.parse(raw)
       this.data = { ...this.data, ...parsed }
+      const stat = fs.statSync(this.filePath)
+      this.lastFileMtimeMs = Number(stat?.mtimeMs || 0)
     } catch {}
   }
 
+  reloadIfChanged() {
+    if (!fs.existsSync(this.filePath)) {
+      if (this.lastFileMtimeMs !== 0) {
+        this.lastFileMtimeMs = 0
+        return true
+      }
+      return false
+    }
+    try {
+      const stat = fs.statSync(this.filePath)
+      const nextMtime = Number(stat?.mtimeMs || 0)
+      if (nextMtime <= this.lastFileMtimeMs + 0.5) return false
+      this.load()
+      return true
+    } catch {
+      return false
+    }
+  }
+
   save() {
-    fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf8')
+    const dir = path.dirname(this.filePath)
+    fs.mkdirSync(dir, { recursive: true })
+    const tmpPath = path.join(dir, `.${path.basename(this.filePath)}.${process.pid}.${Date.now()}.tmp`)
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), 'utf8')
+      fs.renameSync(tmpPath, this.filePath)
+      const stat = fs.statSync(this.filePath)
+      this.lastFileMtimeMs = Number(stat?.mtimeMs || 0)
+    } finally {
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath)
+      } catch {}
+    }
   }
 
   exec() {}
@@ -559,6 +573,29 @@ function initDb() {
   `)
 }
 
+function refreshDbFromDisk(reason = 'manual', force = false) {
+  if (!db) return false
+  try {
+    const changed = force ? (db.load(), true) : db.reloadIfChanged()
+    if (changed) logMain(`db refreshed from disk reason=${reason}`)
+    return changed
+  } catch (e) {
+    logMain(`db refresh failed reason=${reason} error=${e?.message || e}`)
+    return false
+  }
+}
+
+function startDbWatchTimer() {
+  if (dbWatchTimer) clearInterval(dbWatchTimer)
+  dbWatchTimer = setInterval(() => {
+    const changed = refreshDbFromDisk('poll', false)
+    if (changed) {
+      broadcast('storage:data-changed', { changedAt: Date.now() })
+    }
+  }, 1800)
+  dbWatchTimer.unref?.()
+}
+
 function logMain(message) {
   try {
     const logPath = path.join(app.getPath('userData'), 'main.log')
@@ -715,20 +752,9 @@ function normalizeUpdateError(err) {
   return message
 }
 
-async function applyAutoUpdaterFeed(provider) {
+async function applyAutoUpdaterFeed() {
   const updater = await getAutoUpdater()
-  activeUpdateProvider = provider
-  if (provider === 'qiniu') {
-    const baseUrl = getQiniuUpdateBaseUrl()
-    if (!baseUrl) throw new Error('七牛更新地址未配置')
-    updater.setFeedURL({
-      provider: 'generic',
-      url: baseUrl,
-      channel: 'latest',
-      useMultipleRangeRequest: false,
-    })
-    return
-  }
+  activeUpdateProvider = 'github'
   updater.setFeedURL(githubReleaseProvider)
 }
 
@@ -741,30 +767,12 @@ function normalizeVersion(versionLike) {
   return String(versionLike || '').trim().replace(/^v/i, '').split('-')[0]
 }
 
-function compareVersions(a, b) {
-  const pa = normalizeVersion(a).split('.').map((n) => Number.parseInt(n, 10) || 0)
-  const pb = normalizeVersion(b).split('.').map((n) => Number.parseInt(n, 10) || 0)
-  const len = Math.max(pa.length, pb.length)
-  for (let i = 0; i < len; i += 1) {
-    const ai = pa[i] || 0
-    const bi = pb[i] || 0
-    if (ai > bi) return 1
-    if (ai < bi) return -1
-  }
-  return 0
-}
-
 function getPlatformAssetFileName(version) {
   const normalized = normalizeVersion(version)
   if (!normalized) return ''
   if (process.platform === 'win32') return `AstraShell-Setup-${normalized}.exe`
   if (process.platform === 'darwin') return `AstraShell-${normalized}-arm64.dmg`
   return `AstraShell-${normalized}-arm64.AppImage`
-}
-
-function joinUrl(baseUrl, fileName) {
-  if (!baseUrl || !fileName) return ''
-  return `${trimTrailingSlash(baseUrl)}/${fileName}`
 }
 
 function getGitHubReleaseUrl(version) {
@@ -780,224 +788,24 @@ function getGitHubAssetUrl(version) {
     : ''
 }
 
-function getQiniuAssetUrl(version) {
-  const fileName = getPlatformAssetFileName(version)
-  return joinUrl(getQiniuUpdateBaseUrl(), fileName)
-}
-
-function pickMirrorAsset(assets, latestVersion) {
-  if (!Array.isArray(assets) || assets.length === 0) return null
-  const version = normalizeVersion(latestVersion)
-  const rows = assets.map((asset) => {
-    const name = String(asset?.name || '').trim()
-    const url = String(asset?.browser_download_url || asset?.download_url || '').trim()
-    return { name, url }
-  }).filter((row) => row.name && row.url)
-
-  if (rows.length === 0) return null
-  const lowerRows = rows.map((row) => ({ ...row, lower: row.name.toLowerCase() }))
-
-  if (process.platform === 'win32') {
-    const exactSetup = lowerRows.find((row) => row.lower === `astrashell-setup-${version}.exe`)
-    if (exactSetup) return exactSetup
-    const fuzzy = lowerRows.find((row) => row.lower.endsWith('.exe') && !row.lower.endsWith('.blockmap'))
-    return fuzzy || null
-  }
-
-  if (process.platform === 'darwin') {
-    const exact = lowerRows.find((row) => row.lower === `astrashell-${version}-arm64.dmg`)
-    if (exact) return exact
-    const fuzzy = lowerRows.find((row) => row.lower.endsWith('.dmg'))
-    return fuzzy || null
-  }
-
-  const appImage = lowerRows.find((row) => row.lower.endsWith('.appimage'))
-  return appImage || null
-}
-
-async function checkGiteeMirrorForUpdates() {
-  const response = await fetch(giteeMirror.apiLatest)
-  if (!response.ok) {
-    throw new Error(`镜像源不可用（HTTP ${response.status}）`)
-  }
-  const release = await response.json()
-  const tag = String(release?.tag_name || '')
-  if (!tag) {
-    throw new Error('镜像源未返回有效版本标签')
-  }
-  const latestVersion = normalizeVersion(tag)
-  const currentVersion = normalizeVersion(app.getVersion())
-  const hasUpdate = compareVersions(latestVersion, currentVersion) > 0
-  if (!hasUpdate) {
-    setUpdateState({
-      status: 'idle',
-      message: `当前已是最新版本（${currentVersion}）`,
-      latestVersion: currentVersion,
-      hasUpdate: false,
-      downloaded: false,
-      checking: false,
-      downloading: false,
-      progress: 0,
-      source: 'gitee',
-      downloadUrl: '',
-      releaseUrl: giteeMirror.releasePage,
-      mirrorTag: tag,
-      mirrorDownloadUrl: '',
-      mirrorReleaseUrl: giteeMirror.releasePage,
-      mirrorDownloadedFilePath: '',
-    })
-    return { ok: true, hasUpdate: false }
-  }
-
-  const asset = pickMirrorAsset(release?.assets || [], latestVersion)
-  if (!asset) {
-    throw new Error('镜像源未找到当前平台安装包')
-  }
-
-  setUpdateState({
-    status: 'available',
-    message: `发现新版本：${latestVersion}（镜像源 Gitee）`,
-    latestVersion,
-    hasUpdate: true,
-    downloaded: false,
-    checking: false,
-    downloading: false,
-    progress: 0,
-    source: 'gitee',
-    downloadUrl: asset.url,
-    releaseUrl: giteeMirror.releasePage,
-    mirrorTag: tag,
-    mirrorDownloadUrl: asset.url,
-    mirrorReleaseUrl: giteeMirror.releasePage,
-    mirrorDownloadedFilePath: '',
-  })
-  return { ok: true, hasUpdate: true }
-}
-
-async function downloadFileFromUrl(url, outputPath, onProgress) {
-  const response = await fetch(url, { redirect: 'follow' })
-  if (!response.ok || !response.body) {
-    throw new Error(`下载失败（HTTP ${response.status}）`)
-  }
-  const total = Number(response.headers.get('content-length') || 0)
-  const file = fs.createWriteStream(outputPath)
-  const reader = response.body.getReader()
-  let received = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) {
-      const chunk = Buffer.from(value)
-      file.write(chunk)
-      received += chunk.length
-      if (total > 0 && onProgress) {
-        onProgress(Math.min(100, (received / total) * 100))
-      }
-    }
-  }
-  await new Promise((resolve, reject) => {
-    file.end(() => resolve(true))
-    file.on('error', reject)
-  })
-}
-
-async function downloadMirrorUpdatePackage() {
-  const downloadUrl = String(updateState.mirrorDownloadUrl || '')
-  if (!downloadUrl) {
-    throw new Error('镜像更新地址为空')
-  }
-  const fileName = path.basename(new URL(downloadUrl).pathname) || `AstraShell-${updateState.latestVersion}.bin`
-  const dir = path.join(app.getPath('userData'), 'updates')
-  fs.mkdirSync(dir, { recursive: true })
-  const outPath = path.join(dir, fileName)
-  setUpdateState({
-    status: 'downloading',
-    message: '镜像源下载中：0%',
-    downloading: true,
-    downloaded: false,
-    progress: 0,
-  })
-  await downloadFileFromUrl(downloadUrl, outPath, (percent) => {
-    setUpdateState({
-      status: 'downloading',
-      message: `镜像源下载中：${Math.round(percent)}%`,
-      downloading: true,
-      progress: Number(percent),
-    })
-  })
-  setUpdateState({
-    status: 'downloaded',
-    message: `镜像包下载完成：${fileName}，可执行安装`,
-    downloaded: true,
-    downloading: false,
-    progress: 100,
-    mirrorDownloadedFilePath: outPath,
-  })
-  return outPath
-}
-
-async function installMirrorUpdatePackage() {
-  const filePath = String(updateState.mirrorDownloadedFilePath || '')
-  if (!filePath || !fs.existsSync(filePath)) {
-    throw new Error('镜像安装包不存在，请先下载')
-  }
-  if (process.platform === 'win32') {
-    await cleanupAppRuntimeForInstall('mirror-update-install')
-    scheduleWindowsSelfKill('mirror-update-install')
-    const child = spawn(filePath, [], { detached: true, stdio: 'ignore' })
-    child.unref()
-    setTimeout(() => app.quit(), 200)
-    return
-  }
-  if (process.platform === 'darwin') {
-    const child = spawn('open', [filePath], { detached: true, stdio: 'ignore' })
-    child.unref()
-    return
-  }
-  const openErr = await shell.openPath(filePath)
-  if (openErr) throw new Error(openErr)
-}
-
 async function checkForUpdatesNow() {
   if (isDev) return { ok: false, error: '开发模式不支持自动更新检查' }
   await initAutoUpdater()
   const updater = await getAutoUpdater()
-  const qiniuBaseUrl = getQiniuUpdateBaseUrl()
-  if (qiniuBaseUrl) {
-    try {
-      await applyAutoUpdaterFeed('qiniu')
-      await updater.checkForUpdates()
-      return { ok: true, source: 'qiniu', hasUpdate: !!updateState.hasUpdate }
-    } catch (e) {
-      const qiniuMessage = normalizeUpdateError(e)
-      logMain(`update check qiniu error: ${qiniuMessage}`)
-    }
-  }
   try {
-    await applyAutoUpdaterFeed('github')
+    await applyAutoUpdaterFeed()
     await updater.checkForUpdates()
     return { ok: true }
   } catch (e) {
-    const githubMessage = normalizeUpdateError(e)
-    logMain(`update check github error: ${githubMessage}`)
-    try {
-      const mirrorResult = await checkGiteeMirrorForUpdates()
-      if (mirrorResult.ok) {
-        return { ok: true, source: 'gitee', hasUpdate: !!mirrorResult.hasUpdate }
-      }
-    } catch (mirrorErr) {
-      const mirrorMessage = normalizeUpdateError(mirrorErr)
-      const merged = `GitHub：${githubMessage}；Gitee：${mirrorMessage}`
-      setUpdateState({
-        status: 'error',
-        message: `检查更新失败：${merged}`,
-        checking: false,
-        source: 'github',
-      })
-      logMain(`update check gitee error: ${mirrorMessage}`)
-      return { ok: false, error: merged }
-    }
-    return { ok: true, source: 'gitee', hasUpdate: !!updateState.hasUpdate }
+    const message = normalizeUpdateError(e)
+    logMain(`update check github error: ${message}`)
+    setUpdateState({
+      status: 'error',
+      message: `检查更新失败：${message}`,
+      checking: false,
+      source: 'github',
+    })
+    return { ok: false, error: message }
   }
 }
 
@@ -1007,7 +815,7 @@ async function initAutoUpdater() {
   updaterInitialized = true
   updater.autoDownload = false
   updater.autoInstallOnAppQuit = false
-  await applyAutoUpdaterFeed(getQiniuUpdateBaseUrl() ? 'qiniu' : 'github')
+  await applyAutoUpdaterFeed()
 
   updater.on('checking-for-update', () => {
     const source = activeUpdateProvider
@@ -1020,9 +828,6 @@ async function initAutoUpdater() {
       source,
       downloadUrl: '',
       releaseUrl: '',
-      mirrorDownloadUrl: '',
-      mirrorReleaseUrl: '',
-      mirrorDownloadedFilePath: '',
     })
   })
 
@@ -1032,8 +837,8 @@ async function initAutoUpdater() {
     const installHint = process.platform === 'darwin' && !getMacAutoInstallSupport().supported
       ? '，当前构建仅支持手动安装（请下载 DMG）'
       : ''
-    const downloadUrl = source === 'qiniu' ? getQiniuAssetUrl(latestVersion) : getGitHubAssetUrl(latestVersion)
-    const releaseUrl = source === 'qiniu' ? downloadUrl : getGitHubReleaseUrl(latestVersion)
+    const downloadUrl = getGitHubAssetUrl(latestVersion)
+    const releaseUrl = getGitHubReleaseUrl(latestVersion)
     setUpdateState({
       status: 'available',
       message: `发现新版本：${latestVersion || '未知版本'}（${getUpdateSourceLabel(source)}）${installHint}`,
@@ -1046,10 +851,6 @@ async function initAutoUpdater() {
       source,
       downloadUrl,
       releaseUrl,
-      mirrorTag: '',
-      mirrorDownloadUrl: '',
-      mirrorReleaseUrl: '',
-      mirrorDownloadedFilePath: '',
     })
   })
 
@@ -1067,10 +868,6 @@ async function initAutoUpdater() {
       source,
       downloadUrl: '',
       releaseUrl: '',
-      mirrorTag: '',
-      mirrorDownloadUrl: '',
-      mirrorReleaseUrl: '',
-      mirrorDownloadedFilePath: '',
     })
   })
 
@@ -1097,7 +894,6 @@ async function initAutoUpdater() {
       downloading: false,
       progress: 100,
       source,
-      mirrorDownloadedFilePath: '',
     })
   })
 
@@ -1206,6 +1002,7 @@ app.whenReady().then(() => {
     buildAppMenu()
     initDb()
     logMain('initDb ok')
+    startDbWatchTimer()
     broadcastUpdateState()
     createWindow()
     logMain('createWindow called')
@@ -1235,8 +1032,15 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+app.on('before-quit', () => {
+  if (dbWatchTimer) {
+    clearInterval(dbWatchTimer)
+    dbWatchTimer = null
+  }
+})
+
 ipcMain.handle('app:get-storage', async () => {
-  const dbPath = resolveDbPath()
+  const dbPath = activeDbPath || resolveDbPath()
   return { ok: true, dbPath }
 })
 
@@ -1304,16 +1108,6 @@ ipcMain.handle('update:check', async () => {
 
 ipcMain.handle('update:download', async () => {
   if (isDev) return { ok: false, error: '开发模式不支持下载更新' }
-  if (updateState.source === 'gitee') {
-    try {
-      await downloadMirrorUpdatePackage()
-      return { ok: true }
-    } catch (e) {
-      const message = normalizeUpdateError(e)
-      setUpdateState({ status: 'error', message: `镜像下载失败：${message}`, downloading: false })
-      return { ok: false, error: message }
-    }
-  }
   if (process.platform === 'darwin' && !getMacAutoInstallSupport().supported) {
     return { ok: false, error: macManualInstallTip }
   }
@@ -1331,16 +1125,6 @@ ipcMain.handle('update:download', async () => {
 
 ipcMain.handle('update:install', async () => {
   if (isDev) return { ok: false, error: '开发模式不支持安装更新' }
-  if (updateState.source === 'gitee') {
-    try {
-      await installMirrorUpdatePackage()
-      return { ok: true }
-    } catch (e) {
-      const message = normalizeUpdateError(e)
-      setUpdateState({ status: 'error', message: `镜像安装失败：${message}` })
-      return { ok: false, error: message }
-    }
-  }
   if (process.platform === 'darwin' && !getMacAutoInstallSupport().supported) {
     return { ok: false, error: macManualInstallTip }
   }
@@ -1356,9 +1140,13 @@ ipcMain.handle('update:install', async () => {
   return { ok: true }
 })
 
-ipcMain.handle('hosts:list', async () => ({ ok: true, items: db.prepare('SELECT * FROM hosts ORDER BY updated_at DESC').all() }))
+ipcMain.handle('hosts:list', async () => {
+  refreshDbFromDisk('hosts:list')
+  return { ok: true, items: db.prepare('SELECT * FROM hosts ORDER BY updated_at DESC').all() }
+})
 
 ipcMain.handle('hosts:save', async (_event, payload) => {
+  refreshDbFromDisk('hosts:save')
   const now = Date.now()
   const id = payload.id || uuidv4()
   db.prepare(`
@@ -1386,11 +1174,13 @@ ipcMain.handle('hosts:save', async (_event, payload) => {
 })
 
 ipcMain.handle('hosts:delete', async (_event, payload) => {
+  refreshDbFromDisk('hosts:delete')
   db.prepare('DELETE FROM hosts WHERE id = ?').run(payload.id)
   return { ok: true }
 })
 
 ipcMain.handle('snippets:get-state', async () => {
+  refreshDbFromDisk('snippets:get-state')
   recoverSnippetsFromSiblingFilesIfNeeded()
   const normalized = normalizeSnippetStateForRead({
     items: db.data.snippets,
@@ -1404,6 +1194,7 @@ ipcMain.handle('snippets:get-state', async () => {
 })
 
 ipcMain.handle('snippets:set-state', async (_event, payload) => {
+  refreshDbFromDisk('snippets:set-state')
   const normalized = normalizeSnippetState(payload)
   db.data.snippets = normalized.items
   db.data.snippet_meta = {
@@ -1415,6 +1206,7 @@ ipcMain.handle('snippets:set-state', async (_event, payload) => {
 })
 
 ipcMain.handle('vault:status', async () => {
+  refreshDbFromDisk('vault:status')
   const row = db.prepare('SELECT id FROM vault_meta WHERE id = 1').get()
   const state = { ok: true, initialized: !!row, unlocked: !!vaultKey }
   logMain(`vault:status initialized=${state.initialized} unlocked=${state.unlocked}`)
@@ -1423,6 +1215,7 @@ ipcMain.handle('vault:status', async () => {
 
 ipcMain.handle('vault:set-master', async (_event, payload) => {
   try {
+    refreshDbFromDisk('vault:set-master')
     const pwd = String(payload?.masterPassword || '')
     if (!pwd || pwd.length < 1) return { ok: false, error: '主密码不能为空' }
 
@@ -1441,6 +1234,7 @@ ipcMain.handle('vault:set-master', async (_event, payload) => {
 
 ipcMain.handle('vault:unlock', async (_event, payload) => {
   try {
+    refreshDbFromDisk('vault:unlock')
     const pwd = String(payload?.masterPassword || '')
     if (!pwd) return { ok: false, error: '请输入主密码' }
 
@@ -1460,6 +1254,7 @@ ipcMain.handle('vault:unlock', async (_event, payload) => {
 
 ipcMain.handle('vault:reset', async () => {
   try {
+    refreshDbFromDisk('vault:reset')
     db.data.vault_meta = null
     db.data.vault_keys = []
     db.save()
@@ -1472,6 +1267,7 @@ ipcMain.handle('vault:reset', async () => {
 })
 
 ipcMain.handle('vault:key-save', async (_event, payload) => {
+  refreshDbFromDisk('vault:key-save')
   if (!vaultKey) return { ok: false, error: '密钥仓库未解锁' }
   const sshpk = await getSshpk()
   const id = payload.id || uuidv4()
@@ -1562,9 +1358,13 @@ ipcMain.handle('vault:key-import-file', async () => {
   return { ok: true, content, detectedType, filePath }
 })
 
-ipcMain.handle('vault:key-list', async () => ({ ok: true, items: db.prepare('SELECT id, name, type, fingerprint, created_at, updated_at FROM vault_keys ORDER BY updated_at DESC').all() }))
+ipcMain.handle('vault:key-list', async () => {
+  refreshDbFromDisk('vault:key-list')
+  return { ok: true, items: db.prepare('SELECT id, name, type, fingerprint, created_at, updated_at FROM vault_keys ORDER BY updated_at DESC').all() }
+})
 
 ipcMain.handle('vault:key-get', async (_event, payload) => {
+  refreshDbFromDisk('vault:key-get')
   if (!vaultKey) return { ok: false, error: '密钥仓库未解锁' }
   const row = db.prepare('SELECT * FROM vault_keys WHERE id = ?').get(payload.id)
   if (!row) return { ok: false, error: '密钥不存在' }

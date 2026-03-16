@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('lightterm', {
   updateDownload: () => ipcRenderer.invoke('update:download'),
   updateInstall: () => ipcRenderer.invoke('update:install'),
   onUpdateStatus: (handler) => ipcRenderer.on('update:status', (_event, data) => handler(data)),
+  onStorageDataChanged: (handler) => ipcRenderer.on('storage:data-changed', (_event, data) => handler(data)),
 
   hostsList: () => ipcRenderer.invoke('hosts:list'),
   hostsSave: (payload) => ipcRenderer.invoke('hosts:save', payload),

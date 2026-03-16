@@ -17,6 +17,7 @@ declare global {
       updateDownload: () => Promise<{ ok: boolean; error?: string }>
       updateInstall: () => Promise<{ ok: boolean; error?: string }>
       onUpdateStatus: (handler: (data: { status?: string; message?: string; currentVersion?: string; latestVersion?: string; source?: string; hasUpdate?: boolean; downloaded?: boolean; checking?: boolean; downloading?: boolean; progress?: number; downloadUrl?: string; releaseUrl?: string }) => void) => void
+      onStorageDataChanged: (handler: (data: { changedAt?: number }) => void) => void
 
       hostsList: () => Promise<{ ok: boolean; items?: any[] }>
       hostsSave: (payload: any) => Promise<{ ok: boolean; id?: string; error?: string }>
