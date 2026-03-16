@@ -20,15 +20,15 @@ const sshForm = ref({ host: '', port: 22, username: 'root', password: '' })
 const authType = ref<'password' | 'key'>('password')
 const selectedKeyRef = ref('')
 const sshStatus = ref('')
-const sshSessionId = ref('default')
+const sshSessionId = ref('')
 const sshConnected = ref(false)
 const focusTerminal = ref(false)
 
 type LocalSSHConfig = { host: string; port?: number; username: string; password?: string; privateKey?: string }
 type SshTab = { id: string; name: string; connected: boolean }
-const sshTabs = ref<SshTab[]>([{ id: 'default', name: '会话-1', connected: false }])
+const sshTabs = ref<SshTab[]>([])
 const SSH_BUFFER_MAX_CHARS = 240000
-const sshBufferBySession = new Map<string, string>([['default', '']])
+const sshBufferBySession = new Map<string, string>()
 
 const hostName = ref('')
 const hostCategory = ref(DEFAULT_CATEGORY)
@@ -45,6 +45,7 @@ const extraCategories = ref<string[]>([])
 type HostProbeState = 'unknown' | 'checking' | 'online' | 'offline'
 const hostProbeById = ref<Record<string, { state: HostProbeState; detail?: string }>>({})
 let hostProbeBatchId = 0
+let hostProbeRunning = false
 
 const notify = (ok: boolean, message: string) => {
   if (ok) {
@@ -300,9 +301,6 @@ const terminalSnippetItems = computed(() => {
   })
 })
 
-const syncStatusText = ref('本地版：不是云同步；同步依赖同一个共享目录里的 lightterm.db 文件。')
-const syncQueueCount = ref(0)
-
 const updateInfo = ref({
   status: 'idle',
   message: '等待检查更新',
@@ -335,6 +333,12 @@ type UpdateStatePayload = Partial<{
 type UpdateActionResult = { ok: boolean; error?: string }
 
 const updateActionBusy = ref(false)
+const serialPortsLoaded = ref(false)
+const hostsLoaded = ref(false)
+const vaultKeysLoaded = ref(false)
+const updateStateLoaded = ref(false)
+const localFsLoaded = ref(false)
+const rightLocalFsLoaded = ref(false)
 const isMacClient = computed(() => /mac/i.test(navigator.platform || ''))
 const showManualMacUpdate = computed(() => (
   isMacClient.value
@@ -376,6 +380,7 @@ const createEmptySnippet = (): SnippetItem => ({
 })
 
 const snippetItems = ref<SnippetItem[]>([])
+const snippetsLoaded = ref(false)
 const snippetKeyword = ref('')
 const snippetCategory = ref(SNIPPET_ALL_CATEGORY)
 const snippetStatus = ref('')
@@ -402,6 +407,7 @@ const startupGateBusy = ref(false)
 const startupGateError = ref('')
 const startupDbFolder = ref('')
 const startupMasterConfirm = ref('')
+const startupTasksLoaded = ref(false)
 
 const serialPorts = ref<any[]>([])
 const serialForm = ref<{ path: string; baudRate: number; dataBits: number; stopBits: number; parity: 'none' | 'even' | 'odd' }>({
@@ -416,6 +422,7 @@ let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 
 watch(focusTerminal, (value) => {
+  if (value && !snippetsLoaded.value) void restoreSnippets()
   nextTick(() => {
     initTerminal()
     fitAddon?.fit()
@@ -546,6 +553,11 @@ const createSshTab = (name = '新会话') => {
   return id
 }
 
+const ensureActiveSshSession = (name = '新会话') => {
+  if (sshSessionId.value && sshTabs.value.some((tab) => tab.id === sshSessionId.value)) return sshSessionId.value
+  return createSshTab(name)
+}
+
 const closeSshTab = async (sessionId: string) => {
   const tabs = sshTabs.value
   const targetIndex = tabs.findIndex((item) => item.id === sessionId)
@@ -558,13 +570,13 @@ const closeSshTab = async (sessionId: string) => {
   sshBufferBySession.delete(sessionId)
 
   if (nextTabs.length === 0) {
-    sshTabs.value = [{ id: 'default', name: '会话-1', connected: false }]
+    sshTabs.value = []
     sshBufferBySession.clear()
-    sshBufferBySession.set('default', '')
-    sshSessionId.value = 'default'
+    sshSessionId.value = ''
     sshConnected.value = false
+    focusTerminal.value = false
+    nav.value = 'hosts'
     saveSshTabs()
-    renderActiveSshBuffer()
     return
   }
 
@@ -626,14 +638,24 @@ const restoreSshTabs = () => {
   try {
     const raw = localStorage.getItem('lightterm.sshTabs')
     if (!raw) {
-      ensureSshBuffer(sshSessionId.value)
+      sshTabs.value = []
+      sshSessionId.value = ''
+      sshConnected.value = false
+      sshBufferBySession.clear()
       return
     }
     const parsed = JSON.parse(raw) as Array<{ id: string; name: string }>
-    if (!Array.isArray(parsed) || parsed.length === 0) return
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      sshTabs.value = []
+      sshSessionId.value = ''
+      sshConnected.value = false
+      sshBufferBySession.clear()
+      return
+    }
     sshTabs.value = parsed.map((p) => ({ ...p, connected: false }))
     const first = sshTabs.value[0]
-    if (first) sshSessionId.value = first.id
+    sshSessionId.value = first?.id || ''
+    sshConnected.value = false
     sshBufferBySession.clear()
     sshTabs.value.forEach((t) => sshBufferBySession.set(t.id, ''))
     ensureSshBuffer(sshSessionId.value)
@@ -748,36 +770,40 @@ const saveSnippetState = async (items = snippetItems.value, extraCategories = sn
 }
 
 const restoreSnippets = async () => {
-  const res = await window.lightterm.snippetsGetState()
-  if (!res.ok) {
+  try {
+    const res = await window.lightterm.snippetsGetState()
+    if (!res.ok) {
+      applySnippetState([buildDefaultDockerSnippet()], [])
+      await saveSnippetState()
+      return
+    }
+
+    const remoteItems = Array.isArray(res.items) ? (res.items as SnippetItem[]) : []
+    const remoteCategories = Array.isArray(res.extraCategories) ? res.extraCategories : []
+    const legacy = readLegacySnippets()
+    if (legacy && (legacy.items.length > 0 || legacy.extraCategories.length > 0)) {
+      const merged = mergeSnippetSources(remoteItems, remoteCategories, legacy.items, legacy.extraCategories)
+      applySnippetState(merged.items, merged.extraCategories)
+      if (merged.changed || remoteItems.length === 0) {
+        await saveSnippetState(merged.items, merged.extraCategories)
+        snippetStatus.value = remoteItems.length > 0 || remoteCategories.length > 0
+          ? '已合并本机旧版代码片段到共享数据库'
+          : '已迁移本机旧版代码片段到共享数据库'
+      }
+      try { localStorage.removeItem(LEGACY_SNIPPET_STORAGE_KEY) } catch {}
+      return
+    }
+
+    if (remoteItems.length > 0 || remoteCategories.length > 0) {
+      applySnippetState(remoteItems, remoteCategories)
+      return
+    }
+
     applySnippetState([buildDefaultDockerSnippet()], [])
     await saveSnippetState()
-    return
+  } finally {
+    snippetsLoaded.value = true
   }
-
-  const remoteItems = Array.isArray(res.items) ? (res.items as SnippetItem[]) : []
-  const remoteCategories = Array.isArray(res.extraCategories) ? res.extraCategories : []
-  const legacy = readLegacySnippets()
-  if (legacy && (legacy.items.length > 0 || legacy.extraCategories.length > 0)) {
-    const merged = mergeSnippetSources(remoteItems, remoteCategories, legacy.items, legacy.extraCategories)
-    applySnippetState(merged.items, merged.extraCategories)
-    if (merged.changed || remoteItems.length === 0) {
-      await saveSnippetState(merged.items, merged.extraCategories)
-      snippetStatus.value = remoteItems.length > 0 || remoteCategories.length > 0
-        ? '已合并本机旧版代码片段到共享数据库'
-        : '已迁移本机旧版代码片段到共享数据库'
-    }
-    try { localStorage.removeItem(LEGACY_SNIPPET_STORAGE_KEY) } catch {}
-    return
-  }
-
-  if (remoteItems.length > 0 || remoteCategories.length > 0) {
-    applySnippetState(remoteItems, remoteCategories)
-    return
-  }
-
-  applySnippetState([buildDefaultDockerSnippet()], [])
-  await saveSnippetState()
 }
 
 const openSnippetEditor = (item: SnippetItem) => {
@@ -1065,6 +1091,8 @@ const connectSSH = async (optionsOrEvent?: { keepNav?: boolean } | Event) => {
   const keepNav = typeof optionsOrEvent === 'object' && optionsOrEvent !== null && 'keepNav' in optionsOrEvent
     ? !!optionsOrEvent.keepNav
     : false
+  const sessionLabel = (hostName.value || sshForm.value.host || '新会话').trim() || '新会话'
+  const sessionId = ensureActiveSshSession(sessionLabel)
   let privateKey = ''
   if (authType.value === 'key') {
     if (!selectedKeyRef.value) {
@@ -1083,10 +1111,10 @@ const connectSSH = async (optionsOrEvent?: { keepNav?: boolean } | Event) => {
     ...sshForm.value,
     password: authType.value === 'password' ? sshForm.value.password : undefined,
     privateKey: authType.value === 'key' ? privateKey : undefined,
-    sessionId: sshSessionId.value,
+    sessionId,
   })
   sshConnected.value = !!res.ok
-  const tab = sshTabs.value.find((t) => t.id === sshSessionId.value)
+  const tab = sshTabs.value.find((t) => t.id === sessionId)
   if (tab) {
     tab.connected = !!res.ok
     if (res.ok) {
@@ -1112,11 +1140,16 @@ const connectSSHFromHosts = async () => {
   await connectSSH()
 }
 
+const cancelHostProbe = () => {
+  hostProbeBatchId += 1
+  hostProbeRunning = false
+}
+
 const setHostProbeState = (hostId: string, state: HostProbeState, detail = '') => {
-  hostProbeById.value = {
-    ...hostProbeById.value,
-    [hostId]: { state, detail },
-  }
+  const prev = hostProbeById.value[hostId]
+  const nextDetail = detail || ''
+  if (prev?.state === state && (prev?.detail || '') === nextDetail) return
+  hostProbeById.value[hostId] = { state, detail: nextDetail }
 }
 
 const hostProbeClass = (hostId: string) => hostProbeById.value[hostId]?.state || 'unknown'
@@ -1134,11 +1167,19 @@ const hostProbeTitle = (h: any) => {
 }
 
 const syncHostProbeMap = () => {
-  const next: Record<string, { state: HostProbeState; detail?: string }> = {}
+  const probeMap = hostProbeById.value
+  const activeHostIds = new Set<string>()
+
   hostItems.value.forEach((h) => {
-    next[h.id] = hostProbeById.value[h.id] || { state: 'unknown' }
+    const id = String(h?.id || '')
+    if (!id) return
+    activeHostIds.add(id)
+    if (!probeMap[id]) probeMap[id] = { state: 'unknown' }
   })
-  hostProbeById.value = next
+
+  Object.keys(probeMap).forEach((id) => {
+    if (!activeHostIds.has(id)) delete probeMap[id]
+  })
 }
 
 const buildHostProbeConfig = async (h: any): Promise<{ ok: boolean; cfg?: LocalSSHConfig; error?: string }> => {
@@ -1180,6 +1221,7 @@ const testHostReachability = async (h: any, batchId = hostProbeBatchId) => {
   if (!h?.id || batchId !== hostProbeBatchId) return
   setHostProbeState(h.id, 'checking')
   const built = await buildHostProbeConfig(h)
+  if (batchId !== hostProbeBatchId) return
   if (!built.ok || !built.cfg) {
     setHostProbeState(h.id, 'offline', built.error || '配置不完整')
     return
@@ -1193,28 +1235,42 @@ const testHostReachability = async (h: any, batchId = hostProbeBatchId) => {
   }
 }
 
-const probeAllHosts = async () => {
+const runHostProbeBatch = async (targets: any[]) => {
+  if (hostProbeRunning) return
+  if (!targets.length) return
   syncHostProbeMap()
   const batchId = ++hostProbeBatchId
-  const queue = [...hostItems.value]
-  const workerCount = Math.min(4, queue.length)
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (queue.length > 0) {
-      const host = queue.shift()
-      if (!host) break
-      await testHostReachability(host, batchId)
-    }
-  }))
+  hostProbeRunning = true
+  const queue = [...targets]
+  const workerCount = Math.min(3, queue.length)
+  try {
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (queue.length > 0) {
+        if (batchId !== hostProbeBatchId) return
+        const host = queue.shift()
+        if (!host) break
+        await testHostReachability(host, batchId)
+      }
+    }))
+  } finally {
+    hostProbeRunning = false
+  }
 }
 
-const refreshHosts = async () => {
+const probeAllHosts = async () => runHostProbeBatch(hostItems.value)
+
+const probeFilteredHosts = async () => runHostProbeBatch(filteredHosts.value)
+
+const refreshHosts = async (options: { probe?: boolean } = {}) => {
   const res = await window.lightterm.hostsList()
   if (res.ok) {
     hostItems.value = res.items || []
+    hostsLoaded.value = true
     if (!hostCategories.value.includes(selectedCategory.value) && selectedCategory.value !== ALL_CATEGORY) {
       selectedCategory.value = ALL_CATEGORY
     }
-    void probeAllHosts()
+    syncHostProbeMap()
+    if (options.probe) await probeAllHosts()
   }
 }
 const saveCurrentHost = async () => {
@@ -1313,6 +1369,7 @@ const loadLocalFs = async () => {
   }
   localPath.value = res.path || localPath.value
   localRows.value = res.items || []
+  localFsLoaded.value = true
 }
 
 const loadRightLocalFs = async () => {
@@ -1328,6 +1385,7 @@ const loadRightLocalFs = async () => {
   }
   rightLocalPath.value = res.path || rightLocalPath.value
   rightLocalRows.value = res.items || []
+  rightLocalFsLoaded.value = true
 }
 
 const getSftpConfigByHostId = async (hostId: string) => {
@@ -1789,7 +1847,7 @@ const deleteSftp = async () => {
 }
 
 const plainVaultMessage = (msg: string) => String(msg || '').replace(/^[✅❌]\s*/, '').trim()
-const dbFolderFromPath = (dbPath: string) => String(dbPath || '').replace(/[\\/]lightterm\.db$/i, '')
+const dbFolderFromPath = (dbPath: string) => String(dbPath || '').replace(/[\\/](lightterm\.db|astrashell\.data\.json)$/i, '')
 const formatAppError = (error: unknown) => {
   if (error instanceof Error) return error.message || String(error)
   return String(error || '未知错误')
@@ -1834,7 +1892,7 @@ const useCurrentDbFolder = () => {
 const runStartupInit = async () => {
   if (startupGateBusy.value) return
   if (!startupDbFolder.value.trim()) {
-    startupGateError.value = '请先选择数据库目录'
+    startupGateError.value = '请先选择数据文件目录'
     return
   }
   if (!vaultMaster.value) {
@@ -1853,10 +1911,10 @@ const runStartupInit = async () => {
     if (targetFolder && targetFolder !== currentFolder) {
       const setRes = await window.lightterm.appSetStorageFolder({ folder: targetFolder })
       if (!setRes.ok) {
-        startupGateError.value = `数据库目录设置失败：${setRes.error || '未知错误'}`
+        startupGateError.value = `数据文件目录设置失败：${setRes.error || '未知错误'}`
         return
       }
-      startupGateError.value = '数据库目录已设置，应用正在重启...'
+      startupGateError.value = '数据文件目录已设置，应用正在重启...'
       await window.lightterm.appRestart()
       return
     }
@@ -1889,6 +1947,33 @@ const runStartupUnlock = async () => {
     startupGateVisible.value = false
   } finally {
     startupGateBusy.value = false
+  }
+}
+
+const runPostUnlockStartupTasks = async () => {
+  if (startupTasksLoaded.value) return
+  if (startupGateVisible.value) return
+
+  const startupTasks: Array<[string, () => Promise<unknown>]> = [
+    ['主机列表', refreshHosts],
+    ['存储信息', refreshStorageOverview],
+    ['更新状态', refreshUpdateState],
+  ]
+  if (vaultUnlocked.value) startupTasks.push(['密钥列表', refreshVaultKeys])
+
+  const failures: string[] = []
+  const settled = await Promise.allSettled(startupTasks.map(async ([, task]) => await task()))
+  settled.forEach((result, index) => {
+    if (result.status === 'fulfilled') return
+    const label = startupTasks[index]?.[0] || `任务${index + 1}`
+    failures.push(`${label}加载失败：${formatAppError(result.reason)}`)
+  })
+
+  startupTasksLoaded.value = true
+  if (failures.length > 0) {
+    const message = failures[0] || '启动初始化失败'
+    if (!snippetStatus.value) snippetStatus.value = message
+    console.error('[startup]', failures)
   }
 }
 
@@ -2053,34 +2138,20 @@ const refreshVaultKeys = async () => {
   const res = await window.lightterm.vaultKeyList()
   if (res.ok) {
     vaultItems.value = res.items || []
+    vaultKeysLoaded.value = true
     if (selectedVaultKeyId.value && !vaultItems.value.some((k) => k.id === selectedVaultKeyId.value)) {
       clearVaultEditor()
     }
   }
 }
 
-const refreshSyncStatus = async () => {
-  const res = await window.lightterm.syncStatus()
-  if (!res.ok) return
-  syncQueueCount.value = res.queueCount || 0
-}
-const clearSyncQueue = async () => {
-  await window.lightterm.syncClearQueue()
-  await refreshSyncStatus()
-  syncStatusText.value = '本地队列标记已清空'
-}
-const pushSyncNow = async () => {
-  const res = await window.lightterm.syncPushNow()
-  await refreshSyncStatus()
-  syncStatusText.value = res.ok ? `本地队列处理完成：${res.pushed || 0} 条` : '处理失败'
-}
 const copyDbPath = async () => {
   if (!storageDbPath.value) return
   try {
     await navigator.clipboard.writeText(storageDbPath.value)
-    syncStatusText.value = '数据库路径已复制'
+    storageMsg.value = '数据文件路径已复制'
   } catch {
-    syncStatusText.value = '复制失败：请检查系统剪贴板权限'
+    storageMsg.value = '复制失败：请检查系统剪贴板权限'
   }
 }
 
@@ -2121,6 +2192,7 @@ const refreshUpdateState = async () => {
   const res = await window.lightterm.updateGetState()
   if (!res.ok) return
   mergeUpdateState(res)
+  updateStateLoaded.value = true
 }
 
 const checkAppUpdate = async () => runUpdateAction(() => window.lightterm.updateCheck(), '检查更新失败')
@@ -2145,12 +2217,12 @@ const refreshStorageInfo = async () => {
       ensureStartupDbFolder()
     }
   } catch (error) {
-    startupGateError.value = `读取数据库路径失败：${formatAppError(error)}`
+    startupGateError.value = `读取数据文件路径失败：${formatAppError(error)}`
   }
 }
 
-const refreshLocalSyncOverview = async () => {
-  await Promise.all([refreshStorageInfo(), refreshSyncStatus()])
+const refreshStorageOverview = async () => {
+  await refreshStorageInfo()
 }
 
 const pickStorageFolder = async () => {
@@ -2161,13 +2233,14 @@ const applyStorageFolder = async () => {
   if (!storageFolderInput.value) return
   const res = await window.lightterm.appSetStorageFolder({ folder: storageFolderInput.value })
   storageMsg.value = res.ok
-    ? `已设置数据库路径：${res.dbPath}（重启应用生效）`
+    ? `已设置数据文件：${res.dbPath}（重启应用生效）`
     : `设置失败：${res.error}`
-  await refreshLocalSyncOverview()
+  await refreshStorageOverview()
 }
 
 const loadSerialPorts = async () => {
   serialPorts.value = await window.lightterm.listSerialPorts()
+  serialPortsLoaded.value = true
   if (!serialForm.value.path && serialPorts.value.length > 0) serialForm.value.path = serialPorts.value[0].path
 }
 const openSerial = async () => {
@@ -2190,12 +2263,50 @@ const toggleTimerSend = () => {
   serialTimer = window.setInterval(() => sendSerial(), serialTimerMs.value)
 }
 
+watch(nav, async (value) => {
+  if (value === 'hosts') {
+    if (vaultUnlocked.value && !vaultKeysLoaded.value) await refreshVaultKeys()
+    return
+  }
+
+  cancelHostProbe()
+
+  if (value === 'sftp') {
+    if (!localFsLoaded.value) await loadLocalFs()
+    if (!rightLocalFsLoaded.value && rightPanelMode.value === 'local') await loadRightLocalFs()
+    return
+  }
+
+  if (value === 'snippets') {
+    if (!snippetsLoaded.value) await restoreSnippets()
+    return
+  }
+
+  if (value === 'serial') {
+    if (!serialPortsLoaded.value) await loadSerialPorts()
+    return
+  }
+
+  if (value === 'vault') {
+    if (vaultUnlocked.value && !vaultKeysLoaded.value) await refreshVaultKeys()
+    return
+  }
+
+  if (value === 'settings' && !updateStateLoaded.value) {
+    await refreshUpdateState()
+  }
+})
+
+watch(startupGateVisible, (visible) => {
+  if (!visible) void runPostUnlockStartupTasks()
+})
+
 onMounted(async () => {
   startupGateVisible.value = true
   startupGateMode.value = 'loading'
   startupGateError.value = ''
+  void refreshStorageInfo()
   try {
-    await refreshStorageInfo()
     await checkVault()
   } catch (error) {
     startupGateError.value = `启动检查失败：${formatAppError(error)}`
@@ -2204,37 +2315,7 @@ onMounted(async () => {
 
   restoreSshTabs()
   loadTerminalEncoding()
-  initTerminal()
-
-  const startupTasks: Array<[string, () => Promise<unknown>]> = [
-    ['代码片段', restoreSnippets],
-    ['串口列表', loadSerialPorts],
-    ['主机列表', refreshHosts],
-    ['密钥列表', refreshVaultKeys],
-    ['同步信息', refreshLocalSyncOverview],
-    ['更新状态', refreshUpdateState],
-    ['本地文件系统', loadLocalFs],
-  ]
-
-  const failures: string[] = []
-  for (const [label, task] of startupTasks) {
-    try {
-      await task()
-    } catch (error) {
-      failures.push(`${label}加载失败：${formatAppError(error)}`)
-    }
-  }
-
-  if (failures.length > 0) {
-    const message = failures[0] || '启动初始化失败'
-    if (startupGateVisible.value && startupGateMode.value === 'loading') {
-      startupGateMode.value = vaultInitialized.value ? 'unlock' : 'init'
-      startupGateError.value = message
-    } else if (!snippetStatus.value) {
-      snippetStatus.value = message
-    }
-    console.error('[startup]', failures)
-  }
+  if (!startupGateVisible.value) await runPostUnlockStartupTasks()
 
   window.addEventListener('resize', () => {
     fitAddon?.fit()
@@ -2250,6 +2331,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  cancelHostProbe()
   window.removeEventListener('keydown', handleTerminalHotkeys, true)
   window.removeEventListener('click', hideAllMenus)
 })
@@ -2317,6 +2399,24 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <div class="session-strip" v-else-if="sshTabs.length > 0">
+        <div class="session-strip-title">活动 SSH 会话</div>
+        <div class="terminal-tabs session-strip-tabs">
+          <div
+            class="terminal-tab"
+            v-for="tab in sshTabs"
+            :key="tab.id"
+            :class="{ active: sshSessionId === tab.id }"
+            @click="switchSshTab(tab.id); focusTerminal = true"
+          >
+            <span class="terminal-tab-name">{{ tab.name }}</span>
+            <span class="status-dot" :class="tab.connected ? 'online' : 'offline'"></span>
+            <button class="terminal-tab-close" title="关闭并断开" @click.stop="closeSshTab(tab.id)">×</button>
+          </div>
+          <button class="ghost small" @click="createSshTab(); focusTerminal = true">+ 新标签</button>
+        </div>
+      </div>
+
       <section v-if="!focusTerminal && nav === 'hosts'" class="panel hosts-panel">
         <div class="hosts-header">
           <div>
@@ -2352,6 +2452,9 @@ onBeforeUnmount(() => {
           <div class="hosts-center">
             <div class="hosts-toolbar">
               <input v-model="hostKeyword" placeholder="搜索主机 / IP / 用户名" />
+              <button class="ghost tiny" :disabled="hostProbeRunning || filteredHosts.length === 0" @click="probeFilteredHosts">
+                {{ hostProbeRunning ? '检测中...' : '检测当前列表' }}
+              </button>
               <span class="hosts-stat">显示 {{ filteredHosts.length }} / {{ hostItems.length }} 台主机</span>
             </div>
             <div class="host-grid">
@@ -2738,7 +2841,7 @@ onBeforeUnmount(() => {
 
       <section v-else-if="!focusTerminal && nav === 'settings'" class="panel">
         <h3>应用设置</h3>
-        <p class="hint">统一管理应用更新、本地数据库目录和共享文件夹同步状态。</p>
+        <p class="hint">统一管理应用更新与本地数据文件目录。</p>
         <div class="divider"></div>
         <h3>应用更新</h3>
         <p>{{ updateStatusText }}</p>
@@ -2772,27 +2875,20 @@ onBeforeUnmount(() => {
         <p class="hint">发布新版本到 GitHub Release 后，应用启动会自动检查；也可手动检查并一键更新。</p>
         <div class="divider"></div>
         <h3>本地存储</h3>
-        <p>当前数据库：{{ storageDbPath }}</p>
+        <p>当前数据文件：{{ storageDbPath }}</p>
         <div class="grid">
           <input v-model="storageFolderInput" placeholder="选择 iCloud/共享文件夹目录" />
           <button class="muted" @click="pickStorageFolder">选择目录</button>
           <button @click="applyStorageFolder">应用目录</button>
-          <button class="muted" @click="refreshLocalSyncOverview">刷新</button>
+          <button class="muted" @click="refreshStorageOverview">刷新</button>
         </div>
         <p>{{ storageMsg }}</p>
-        <p class="hint">`lightterm.db` 当前是共享 JSON 数据文件，不是云账号同步。Windows 和 mac 都要手动指到同一个云盘/共享目录后再重启应用。</p>
-        <div class="divider"></div>
-        <h3>共享同步</h3>
-        <p>{{ syncStatusText }}</p>
-        <p>当前数据库：{{ storageDbPath }}</p>
         <div class="grid">
-          <button class="muted" @click="refreshLocalSyncOverview">刷新数据库路径</button>
-          <button class="muted" @click="copyDbPath">复制数据库路径</button>
-          <button @click="pushSyncNow">处理本地队列</button>
-          <button class="muted" @click="clearSyncQueue">清空本地队列</button>
+          <button class="muted" @click="refreshStorageOverview">刷新路径</button>
+          <button class="muted" @click="copyDbPath">复制路径</button>
         </div>
-        <p>待处理变更：{{ syncQueueCount }}</p>
-        <p class="hint">建议：把数据库目录放到 iCloud/OneDrive/共享盘；两台设备必须指向同一个 `lightterm.db` 文件，同一时刻只在一台设备写入。</p>
+        <p class="hint">默认文件名为 `astrashell.data.json`。把目录放到 iCloud/OneDrive/共享盘/U 盘即可跨设备直接读取同一份数据。</p>
+        <p class="hint">不再使用“手动同步队列”：所有改动都直接写入数据文件。</p>
       </section>
 
       <section v-else-if="!focusTerminal" class="panel"><h3>模块建设中</h3><p>当前页面：{{ nav }}</p></section>
@@ -2827,14 +2923,14 @@ onBeforeUnmount(() => {
       <div class="startup-card">
         <h3 v-if="startupGateMode === 'loading'">正在检查密钥仓库...</h3>
         <template v-else-if="startupGateMode === 'init'">
-          <h3>首次启动：初始化数据库与密钥仓库</h3>
-          <p>请先确定数据库目录，然后设置主密码完成初始化。</p>
+          <h3>首次启动：初始化数据文件与密码</h3>
+          <p>请先确定数据文件目录，然后设置主密码完成初始化。</p>
           <div class="grid startup-db-grid">
-            <input v-model="startupDbFolder" placeholder="数据库目录（将创建 lightterm.db）" />
+            <input v-model="startupDbFolder" placeholder="数据文件目录（将创建 astrashell.data.json）" />
             <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbFolder">选择目录</button>
             <button class="ghost" :disabled="startupGateBusy" @click="useCurrentDbFolder">使用当前目录</button>
           </div>
-          <p class="hint">当前数据库：{{ storageDbPath || '读取中...' }}</p>
+          <p class="hint">当前数据文件：{{ storageDbPath || '读取中...' }}</p>
           <div class="grid startup-auth-grid">
             <input v-model="vaultMaster" type="password" placeholder="设置主密码" />
             <input v-model="startupMasterConfirm" type="password" placeholder="确认主密码" />
@@ -2842,9 +2938,9 @@ onBeforeUnmount(() => {
           <button :disabled="startupGateBusy" @click="runStartupInit">创建并初始化</button>
         </template>
         <template v-else>
-          <h3>解锁密钥仓库</h3>
+          <h3>解锁数据文件</h3>
           <p>进入软件前请先输入主密码。</p>
-          <p class="hint">当前数据库：{{ storageDbPath || '读取中...' }}</p>
+          <p class="hint">当前数据文件：{{ storageDbPath || '读取中...' }}</p>
           <div class="grid startup-auth-grid">
             <input v-model="vaultMaster" type="password" placeholder="输入主密码" @keyup.enter="runStartupUnlock" />
             <button :disabled="startupGateBusy" @click="runStartupUnlock">解锁并进入</button>
@@ -2875,6 +2971,9 @@ onBeforeUnmount(() => {
 .terminal-top-actions { display: flex; flex-direction: column; gap: 8px; background: #f5f8fc; border: 1px solid #dbe3ee; border-radius: 12px; padding: 8px 10px; }
 .terminal-actions-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .terminal-tabs { display: flex; align-items: center; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+.session-strip { display: flex; align-items: center; gap: 10px; background: #f5f8fc; border: 1px solid #dbe3ee; border-radius: 12px; padding: 8px 10px; }
+.session-strip-title { font-size: 12px; color: #334155; white-space: nowrap; }
+.session-strip-tabs { flex: 1; min-width: 0; }
 .terminal-tab { display: inline-flex; align-items: center; gap: 8px; max-width: 240px; background: #e8edf6; border: 1px solid #d4dde9; border-radius: 999px; padding: 4px 10px; cursor: pointer; }
 .terminal-tab.active { background: #dbeafe; border-color: #93c5fd; }
 .terminal-tab-name { max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: #0f172a; }

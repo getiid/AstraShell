@@ -6,9 +6,6 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { v4 as uuidv4 } from 'uuid'
-import { Client as SSHClient } from 'ssh2'
-import sshpk from 'sshpk'
-import electronUpdater from 'electron-updater'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -23,13 +20,18 @@ const sshSessions = new Map()
 let db
 let vaultKey = null
 let SerialPortCtor = null
+let SSHClientCtor = null
+let sshpkModule = null
 let serialModuleLoadError = ''
-const { autoUpdater } = electronUpdater
+let autoUpdater = null
 let updaterInitialized = false
 let activeUpdateProvider = 'github'
 let runtimeCleanupPromise = null
 let runtimeCleanupReason = ''
 let suppressWindowAllClosedQuit = false
+let macAutoInstallSupport = null
+const DATA_FILE_NAME = 'astrashell.data.json'
+const LEGACY_DB_FILE_NAME = 'lightterm.db'
 const macManualInstallTip = '当前构建未使用 Developer ID 签名，无法一键安装更新。请从 GitHub Release 下载 DMG 手动覆盖安装。'
 const githubReleaseProvider = {
   provider: 'github',
@@ -60,12 +62,9 @@ function checkMacAutoInstallSupport() {
   }
 }
 
-const macAutoInstallSupport = checkMacAutoInstallSupport()
 const updateState = {
   status: 'idle',
-  message: isDev
-    ? '开发模式：自动更新已禁用'
-    : (process.platform === 'darwin' && !macAutoInstallSupport.supported ? `等待检查更新（仅手动安装）` : '等待检查更新'),
+  message: isDev ? '开发模式：自动更新已禁用' : '等待检查更新',
   currentVersion: app.getVersion(),
   latestVersion: '',
   hasUpdate: false,
@@ -80,6 +79,38 @@ const updateState = {
   mirrorDownloadUrl: '',
   mirrorReleaseUrl: '',
   mirrorDownloadedFilePath: '',
+}
+
+async function getSSHClientCtor() {
+  if (SSHClientCtor) return SSHClientCtor
+  const mod = await import('ssh2')
+  SSHClientCtor = mod.Client
+  return SSHClientCtor
+}
+
+async function createSSHClient() {
+  const ClientCtor = await getSSHClientCtor()
+  return new ClientCtor()
+}
+
+async function getSshpk() {
+  if (sshpkModule) return sshpkModule
+  const mod = await import('sshpk')
+  sshpkModule = mod.default || mod
+  return sshpkModule
+}
+
+async function getAutoUpdater() {
+  if (autoUpdater) return autoUpdater
+  const mod = await import('electron-updater')
+  autoUpdater = mod.autoUpdater || mod.default?.autoUpdater || null
+  if (!autoUpdater) throw new Error('无法加载自动更新模块')
+  return autoUpdater
+}
+
+function getMacAutoInstallSupport() {
+  if (!macAutoInstallSupport) macAutoInstallSupport = checkMacAutoInstallSupport()
+  return macAutoInstallSupport
 }
 
 function getSettingsPath() {
@@ -122,11 +153,30 @@ function getUpdateSourceLabel(source) {
 }
 
 function resolveDbPath() {
-  const envPath = process.env.LIGHTTERM_DB_PATH
+  const envPath = process.env.ASTRASHELL_DATA_PATH || process.env.LIGHTTERM_DB_PATH
   if (envPath) return envPath
   const s = readSettings()
-  if (s.dbPath) return s.dbPath
-  return path.join(app.getPath('userData'), 'lightterm.db')
+  if (s.dataPath) return s.dataPath
+  if (s.dbPath) {
+    const legacy = String(s.dbPath)
+    if (/[\\/]lightterm\.db$/i.test(legacy)) {
+      return path.join(path.dirname(legacy), DATA_FILE_NAME)
+    }
+    return legacy
+  }
+  return path.join(app.getPath('userData'), DATA_FILE_NAME)
+}
+
+function migrateLegacyDbFileIfNeeded(targetPath) {
+  if (!targetPath || fs.existsSync(targetPath)) return
+  const legacyPath = path.join(path.dirname(targetPath), LEGACY_DB_FILE_NAME)
+  if (!fs.existsSync(legacyPath)) return
+  try {
+    fs.copyFileSync(legacyPath, targetPath)
+    logMain(`migrated legacy db file: ${legacyPath} -> ${targetPath}`)
+  } catch (e) {
+    logMain(`migrate legacy db file failed: ${e?.message || e}`)
+  }
 }
 
 class JsonDB {
@@ -138,8 +188,6 @@ class JsonDB {
       snippet_meta: { extra_categories: [], updated_at: 0 },
       vault_meta: null,
       vault_keys: [],
-      sync_account: null,
-      sync_queue: [],
     }
     this.load()
   }
@@ -170,12 +218,6 @@ class JsonDB {
             .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))
             .map(({ id, name, type, fingerprint, created_at, updated_at }) => ({ id, name, type, fingerprint, created_at, updated_at }))
         }
-        if (s.startsWith('SELECT * FROM SYNC_QUEUE ORDER BY CREATED_AT DESC')) {
-          return [...self.data.sync_queue].sort((a, b) => (b.created_at || 0) - (a.created_at || 0)).slice(0, 100)
-        }
-        if (s.startsWith('SELECT * FROM SYNC_QUEUE ORDER BY CREATED_AT ASC')) {
-          return [...self.data.sync_queue].sort((a, b) => (a.created_at || 0) - (b.created_at || 0)).slice(0, 200)
-        }
         return []
       },
       get(...args) {
@@ -185,17 +227,9 @@ class JsonDB {
           const id = args[0]
           return self.data.vault_keys.find((k) => k.id === id)
         }
-        if (s.startsWith('SELECT PROVIDER, USER_ID, UPDATED_AT FROM SYNC_ACCOUNT')) return self.data.sync_account || undefined
-        if (s.startsWith('SELECT COUNT(*) AS C FROM SYNC_QUEUE')) return { c: self.data.sync_queue.length }
         return undefined
       },
       run(...args) {
-        if (s.startsWith('INSERT INTO SYNC_QUEUE')) {
-          const [id, entity, entity_id, op, payload, created_at] = args
-          self.data.sync_queue.push({ id, entity, entity_id, op, payload, created_at })
-          self.save()
-          return
-        }
         if (s.startsWith('INSERT INTO HOSTS')) {
           const row = args[0]
           const idx = self.data.hosts.findIndex((h) => h.id === row.id)
@@ -221,17 +255,6 @@ class JsonDB {
           const idx = self.data.vault_keys.findIndex((k) => k.id === row.id)
           if (idx >= 0) self.data.vault_keys[idx] = { ...self.data.vault_keys[idx], ...row }
           else self.data.vault_keys.push(row)
-          self.save()
-          return
-        }
-        if (s.startsWith('INSERT OR REPLACE INTO SYNC_ACCOUNT')) {
-          const [provider, user_id, token, updated_at] = args
-          self.data.sync_account = { id: 1, provider, user_id, token, updated_at }
-          self.save()
-          return
-        }
-        if (s.startsWith('DELETE FROM SYNC_QUEUE')) {
-          self.data.sync_queue = []
           self.save()
           return
         }
@@ -343,27 +366,28 @@ function attachKeyboardHandler(conn, password) {
 
 async function withSftp(payload, handler) {
   return await new Promise((resolve) => {
-    const conn = new SSHClient()
-    attachKeyboardHandler(conn, payload.password)
-    conn
-      .on('ready', () => {
-        conn.sftp(async (err, sftp) => {
-          if (err) {
-            conn.end()
-            return resolve({ ok: false, error: err.message })
-          }
-          try {
-            const result = await handler(sftp)
-            conn.end()
-            resolve(result)
-          } catch (e) {
-            conn.end()
-            resolve({ ok: false, error: e?.message || 'SFTP 操作失败' })
-          }
+    createSSHClient().then((conn) => {
+      attachKeyboardHandler(conn, payload.password)
+      conn
+        .on('ready', () => {
+          conn.sftp(async (err, sftp) => {
+            if (err) {
+              conn.end()
+              return resolve({ ok: false, error: err.message })
+            }
+            try {
+              const result = await handler(sftp)
+              conn.end()
+              resolve(result)
+            } catch (e) {
+              conn.end()
+              resolve({ ok: false, error: e?.message || 'SFTP 操作失败' })
+            }
+          })
         })
-      })
-      .on('error', (err) => resolve({ ok: false, error: err.message }))
-      .connect(connectConfigFromPayload(payload))
+        .on('error', (err) => resolve({ ok: false, error: err.message }))
+        .connect(connectConfigFromPayload(payload))
+    }).catch((e) => resolve({ ok: false, error: e?.message || 'SSH 模块加载失败' }))
   })
 }
 
@@ -371,14 +395,16 @@ function initDb() {
   const dbPath = resolveDbPath()
   try {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+    migrateLegacyDbFileIfNeeded(dbPath)
     db = new JsonDB(dbPath)
     db.save()
   } catch (e) {
-    const fallback = path.join(app.getPath('userData'), 'lightterm.db')
+    const fallback = path.join(app.getPath('userData'), DATA_FILE_NAME)
     fs.mkdirSync(path.dirname(fallback), { recursive: true })
     db = new JsonDB(fallback)
     db.save()
     const settings = readSettings()
+    delete settings.dataPath
     delete settings.dbPath
     writeSettings(settings)
   }
@@ -415,23 +441,6 @@ function initDb() {
       updated_at INTEGER
     );
 
-    CREATE TABLE IF NOT EXISTS sync_account (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      provider TEXT,
-      user_id TEXT,
-      token TEXT,
-      updated_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS sync_queue (
-      id TEXT PRIMARY KEY,
-      entity TEXT NOT NULL,
-      entity_id TEXT NOT NULL,
-      op TEXT NOT NULL,
-      payload TEXT,
-      created_at INTEGER
-    );
-
     CREATE TABLE IF NOT EXISTS snippets (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -449,17 +458,6 @@ function initDb() {
       updated_at INTEGER
     );
   `)
-}
-
-function enqueueSync(entity, entityId, op, payload) {
-  db.prepare('INSERT INTO sync_queue (id, entity, entity_id, op, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-    uuidv4(),
-    entity,
-    entityId,
-    op,
-    JSON.stringify(payload || {}),
-    Date.now(),
-  )
 }
 
 function logMain(message) {
@@ -618,12 +616,13 @@ function normalizeUpdateError(err) {
   return message
 }
 
-function applyAutoUpdaterFeed(provider) {
+async function applyAutoUpdaterFeed(provider) {
+  const updater = await getAutoUpdater()
   activeUpdateProvider = provider
   if (provider === 'qiniu') {
     const baseUrl = getQiniuUpdateBaseUrl()
     if (!baseUrl) throw new Error('七牛更新地址未配置')
-    autoUpdater.setFeedURL({
+    updater.setFeedURL({
       provider: 'generic',
       url: baseUrl,
       channel: 'latest',
@@ -631,7 +630,7 @@ function applyAutoUpdaterFeed(provider) {
     })
     return
   }
-  autoUpdater.setFeedURL(githubReleaseProvider)
+  updater.setFeedURL(githubReleaseProvider)
 }
 
 function setUpdateState(patch) {
@@ -862,12 +861,13 @@ async function installMirrorUpdatePackage() {
 
 async function checkForUpdatesNow() {
   if (isDev) return { ok: false, error: '开发模式不支持自动更新检查' }
-  initAutoUpdater()
+  await initAutoUpdater()
+  const updater = await getAutoUpdater()
   const qiniuBaseUrl = getQiniuUpdateBaseUrl()
   if (qiniuBaseUrl) {
     try {
-      applyAutoUpdaterFeed('qiniu')
-      await autoUpdater.checkForUpdates()
+      await applyAutoUpdaterFeed('qiniu')
+      await updater.checkForUpdates()
       return { ok: true, source: 'qiniu', hasUpdate: !!updateState.hasUpdate }
     } catch (e) {
       const qiniuMessage = normalizeUpdateError(e)
@@ -875,8 +875,8 @@ async function checkForUpdatesNow() {
     }
   }
   try {
-    applyAutoUpdaterFeed('github')
-    await autoUpdater.checkForUpdates()
+    await applyAutoUpdaterFeed('github')
+    await updater.checkForUpdates()
     return { ok: true }
   } catch (e) {
     const githubMessage = normalizeUpdateError(e)
@@ -902,14 +902,15 @@ async function checkForUpdatesNow() {
   }
 }
 
-function initAutoUpdater() {
+async function initAutoUpdater() {
   if (updaterInitialized || isDev) return
+  const updater = await getAutoUpdater()
   updaterInitialized = true
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = false
-  applyAutoUpdaterFeed(getQiniuUpdateBaseUrl() ? 'qiniu' : 'github')
+  updater.autoDownload = false
+  updater.autoInstallOnAppQuit = false
+  await applyAutoUpdaterFeed(getQiniuUpdateBaseUrl() ? 'qiniu' : 'github')
 
-  autoUpdater.on('checking-for-update', () => {
+  updater.on('checking-for-update', () => {
     const source = activeUpdateProvider
     setUpdateState({
       status: 'checking',
@@ -926,10 +927,10 @@ function initAutoUpdater() {
     })
   })
 
-  autoUpdater.on('update-available', (info) => {
+  updater.on('update-available', (info) => {
     const source = activeUpdateProvider
     const latestVersion = info?.version || ''
-    const installHint = process.platform === 'darwin' && !macAutoInstallSupport.supported
+    const installHint = process.platform === 'darwin' && !getMacAutoInstallSupport().supported
       ? '，当前构建仅支持手动安装（请下载 DMG）'
       : ''
     const downloadUrl = source === 'qiniu' ? getQiniuAssetUrl(latestVersion) : getGitHubAssetUrl(latestVersion)
@@ -953,7 +954,7 @@ function initAutoUpdater() {
     })
   })
 
-  autoUpdater.on('update-not-available', () => {
+  updater.on('update-not-available', () => {
     const source = activeUpdateProvider
     setUpdateState({
       status: 'idle',
@@ -974,7 +975,7 @@ function initAutoUpdater() {
     })
   })
 
-  autoUpdater.on('download-progress', (progress) => {
+  updater.on('download-progress', (progress) => {
     const source = activeUpdateProvider
     setUpdateState({
       status: 'downloading',
@@ -985,7 +986,7 @@ function initAutoUpdater() {
     })
   })
 
-  autoUpdater.on('update-downloaded', (info) => {
+  updater.on('update-downloaded', (info) => {
     const source = activeUpdateProvider
     setUpdateState({
       status: 'downloaded',
@@ -1001,7 +1002,7 @@ function initAutoUpdater() {
     })
   })
 
-  autoUpdater.on('error', (e) => {
+  updater.on('error', (e) => {
     const message = normalizeUpdateError(e)
     const source = activeUpdateProvider
     setUpdateState({
@@ -1106,7 +1107,6 @@ app.whenReady().then(() => {
     buildAppMenu()
     initDb()
     logMain('initDb ok')
-    initAutoUpdater()
     broadcastUpdateState()
     createWindow()
     logMain('createWindow called')
@@ -1144,7 +1144,7 @@ ipcMain.handle('app:get-storage', async () => {
 ipcMain.handle('app:pick-storage-folder', async () => {
   const win = BrowserWindow.getFocusedWindow()
   const picked = await dialog.showOpenDialog(win, {
-    title: '选择数据库目录（可选 iCloud/共享文件夹）',
+    title: '选择数据文件目录（可选 iCloud/共享文件夹/U 盘）',
     properties: ['openDirectory', 'createDirectory'],
   })
   if (picked.canceled || !picked.filePaths?.[0]) return { ok: false, error: '已取消' }
@@ -1153,9 +1153,10 @@ ipcMain.handle('app:pick-storage-folder', async () => {
 
 ipcMain.handle('app:set-storage-folder', async (_event, payload) => {
   if (!payload?.folder) return { ok: false, error: '缺少目录' }
-  const nextDbPath = path.join(payload.folder, 'lightterm.db')
+  const nextDbPath = path.join(payload.folder, DATA_FILE_NAME)
   const settings = readSettings()
-  settings.dbPath = nextDbPath
+  settings.dataPath = nextDbPath
+  delete settings.dbPath
   writeSettings(settings)
   return { ok: true, dbPath: nextDbPath, restartRequired: true }
 })
@@ -1214,12 +1215,13 @@ ipcMain.handle('update:download', async () => {
       return { ok: false, error: message }
     }
   }
-  if (process.platform === 'darwin' && !macAutoInstallSupport.supported) {
+  if (process.platform === 'darwin' && !getMacAutoInstallSupport().supported) {
     return { ok: false, error: macManualInstallTip }
   }
-  initAutoUpdater()
+  await initAutoUpdater()
   try {
-    await autoUpdater.downloadUpdate()
+    const updater = await getAutoUpdater()
+    await updater.downloadUpdate()
     return { ok: true }
   } catch (e) {
     const message = normalizeUpdateError(e)
@@ -1240,7 +1242,7 @@ ipcMain.handle('update:install', async () => {
       return { ok: false, error: message }
     }
   }
-  if (process.platform === 'darwin' && !macAutoInstallSupport.supported) {
+  if (process.platform === 'darwin' && !getMacAutoInstallSupport().supported) {
     return { ok: false, error: macManualInstallTip }
   }
   if (!updateState.downloaded) return { ok: false, error: '更新包未下载完成' }
@@ -1250,7 +1252,8 @@ ipcMain.handle('update:install', async () => {
   })
   await cleanupAppRuntimeForInstall('auto-update-install')
   scheduleWindowsSelfKill('auto-update-install')
-  setTimeout(() => autoUpdater.quitAndInstall(false, true), 500)
+  const updater = await getAutoUpdater()
+  setTimeout(() => updater.quitAndInstall(false, true), 500)
   return { ok: true }
 })
 
@@ -1280,13 +1283,11 @@ ipcMain.handle('hosts:save', async (_event, payload) => {
     created_at: now,
     updated_at: now,
   })
-  enqueueSync('hosts', id, 'upsert', payload)
   return { ok: true, id }
 })
 
 ipcMain.handle('hosts:delete', async (_event, payload) => {
   db.prepare('DELETE FROM hosts WHERE id = ?').run(payload.id)
-  enqueueSync('hosts', payload.id, 'delete', { id: payload.id })
   return { ok: true }
 })
 
@@ -1308,11 +1309,6 @@ ipcMain.handle('snippets:set-state', async (_event, payload) => {
     updated_at: normalized.updatedAt,
   }
   db.save()
-  enqueueSync('snippets', 'state', 'replace', {
-    count: normalized.items.length,
-    extraCategories: normalized.extraCategories,
-    updatedAt: normalized.updatedAt,
-  })
   return { ok: true, items: normalized.items, extraCategories: normalized.extraCategories }
 })
 
@@ -1375,6 +1371,7 @@ ipcMain.handle('vault:reset', async () => {
 
 ipcMain.handle('vault:key-save', async (_event, payload) => {
   if (!vaultKey) return { ok: false, error: '密钥仓库未解锁' }
+  const sshpk = await getSshpk()
   const id = payload.id || uuidv4()
   const privateKeyText = String(payload.privateKey || '').trim()
   const publicKeyText = String(payload.publicKey || '').trim()
@@ -1433,11 +1430,11 @@ ipcMain.handle('vault:key-save', async (_event, payload) => {
     created_at: Date.now(),
     updated_at: Date.now(),
   })
-  enqueueSync('vault_keys', id, 'upsert', { id, name: payload.name, type: resolvedType })
   return { ok: true, id, detectedType: resolvedType }
 })
 
 ipcMain.handle('vault:key-import-file', async () => {
+  const sshpk = await getSshpk()
   const win = BrowserWindow.getFocusedWindow()
   const result = await dialog.showOpenDialog(win, {
     title: '选择私钥文件',
@@ -1481,25 +1478,18 @@ ipcMain.handle('vault:key-get', async (_event, payload) => {
   return { ok: true, item: { id: row.id, name: row.name, type: row.type, ...parsed } }
 })
 
-ipcMain.handle('sync:login', async (_event, payload) => {
-  db.prepare('INSERT OR REPLACE INTO sync_account (id, provider, user_id, token, updated_at) VALUES (1, ?, ?, ?, ?)').run(payload.provider || 'custom', payload.userId || 'local-user', payload.token || '', Date.now())
+ipcMain.handle('sync:login', async () => {
   return { ok: true }
 })
 ipcMain.handle('sync:status', async () => {
-  const account = db.prepare('SELECT provider, user_id, updated_at FROM sync_account WHERE id=1').get()
-  const queueCount = db.prepare('SELECT COUNT(*) as c FROM sync_queue').get()?.c || 0
-  return { ok: true, account: account || null, queueCount }
+  return { ok: true, account: null, queueCount: 0 }
 })
-ipcMain.handle('sync:queue', async () => ({ ok: true, items: db.prepare('SELECT * FROM sync_queue ORDER BY created_at DESC LIMIT 100').all() }))
+ipcMain.handle('sync:queue', async () => ({ ok: true, items: [] }))
 ipcMain.handle('sync:clear-queue', async () => {
-  db.prepare('DELETE FROM sync_queue').run()
   return { ok: true }
 })
 ipcMain.handle('sync:push-now', async () => {
-  const items = db.prepare('SELECT * FROM sync_queue ORDER BY created_at ASC LIMIT 200').all()
-  // TODO: 对接真实云端 API。当前为本地模拟“已上传成功”。
-  db.prepare('DELETE FROM sync_queue').run()
-  return { ok: true, pushed: items.length }
+  return { ok: true, pushed: 0 }
 })
 
 ipcMain.handle('serial:list', async () => {
@@ -1548,53 +1538,57 @@ ipcMain.handle('serial:send', async (_event, payload) => {
   return { ok: true }
 })
 
-ipcMain.handle('ssh:test', async (_event, config) => await new Promise((resolve) => {
-  const conn = new SSHClient()
-  attachKeyboardHandler(conn, config.password)
-  conn.on('ready', () => { conn.end(); resolve({ ok: true }) }).on('error', (err) => resolve({ ok: false, error: err.message })).connect(connectConfigFromPayload(config))
-}))
+ipcMain.handle('ssh:test', async (_event, config) => {
+  const conn = await createSSHClient()
+  return await new Promise((resolve) => {
+    attachKeyboardHandler(conn, config.password)
+    conn.on('ready', () => { conn.end(); resolve({ ok: true }) }).on('error', (err) => resolve({ ok: false, error: err.message })).connect(connectConfigFromPayload(config))
+  })
+})
 
-ipcMain.handle('ssh:connect', async (_event, payload) => await new Promise((resolve) => {
+ipcMain.handle('ssh:connect', async (_event, payload) => {
   const sessionId = payload.sessionId
-  if (!sessionId) return resolve({ ok: false, error: '缺少 sessionId' })
+  if (!sessionId) return { ok: false, error: '缺少 sessionId' }
   const existing = sshSessions.get(sessionId)
   if (existing) {
     try { existing.stream.end('exit\n') } catch {}
     try { existing.conn.end() } catch {}
     sshSessions.delete(sessionId)
   }
-  const conn = new SSHClient()
+  const conn = await createSSHClient()
   attachKeyboardHandler(conn, payload.password)
-  let settled = false
-  const finish = (value) => {
-    if (settled) return
-    settled = true
-    resolve(value)
-  }
-  conn.on('ready', () => {
-    conn.shell({ term: 'xterm-256color', cols: 120, rows: 30 }, (err, stream) => {
-      if (err) return finish({ ok: false, error: err.message })
-      sshSessions.set(sessionId, { conn, stream })
-      stream.on('data', (chunk) => {
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-        broadcast('ssh:data', {
-          sessionId,
-          data: buffer.toString('utf8'),
-          dataBase64: buffer.toString('base64'),
+  return await new Promise((resolve) => {
+    let settled = false
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    conn.on('ready', () => {
+      conn.shell({ term: 'xterm-256color', cols: 120, rows: 30 }, (err, stream) => {
+        if (err) return finish({ ok: false, error: err.message })
+        sshSessions.set(sessionId, { conn, stream })
+        stream.on('data', (chunk) => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+          broadcast('ssh:data', {
+            sessionId,
+            data: buffer.toString('utf8'),
+            dataBase64: buffer.toString('base64'),
+          })
         })
+        stream.on('close', () => {
+          broadcast('ssh:close', { sessionId })
+          const active = sshSessions.get(sessionId)
+          if (active?.conn === conn) {
+            sshSessions.delete(sessionId)
+          }
+          conn.end()
+        })
+        finish({ ok: true })
       })
-      stream.on('close', () => {
-        broadcast('ssh:close', { sessionId })
-        const active = sshSessions.get(sessionId)
-        if (active?.conn === conn) {
-          sshSessions.delete(sessionId)
-        }
-        conn.end()
-      })
-      finish({ ok: true })
-    })
-  }).on('error', (err) => { broadcast('ssh:error', { sessionId, error: err.message }); finish({ ok: false, error: err.message }) }).connect(connectConfigFromPayload(payload))
-}))
+    }).on('error', (err) => { broadcast('ssh:error', { sessionId, error: err.message }); finish({ ok: false, error: err.message }) }).connect(connectConfigFromPayload(payload))
+  })
+})
 
 ipcMain.handle('ssh:write', async (_event, payload) => {
   const session = sshSessions.get(payload.sessionId)
