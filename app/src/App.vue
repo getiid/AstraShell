@@ -401,7 +401,7 @@ const storagePathInput = ref('')
 const storageMsg = ref('')
 const storageMetaText = ref('')
 const startupGateVisible = ref(true)
-const startupGateMode = ref<'loading' | 'init' | 'unlock'>('loading')
+const startupGateMode = ref<'loading' | 'select' | 'init' | 'unlock'>('loading')
 const startupGateBusy = ref(false)
 const startupGateError = ref('')
 const startupDbPath = ref('')
@@ -1866,6 +1866,12 @@ const ensureStartupDbPath = () => {
   if (storageDbPath.value) startupDbPath.value = storageDbPath.value
 }
 
+const beginStartupInit = () => {
+  ensureStartupDbPath()
+  startupGateMode.value = 'init'
+  startupGateError.value = ''
+}
+
 const evaluateVaultGate = () => {
   if (!vaultInitialized.value) {
     startupGateMode.value = 'init'
@@ -1904,6 +1910,39 @@ const useCurrentDbPath = () => {
   startupGateError.value = ''
 }
 
+const applyStartupStoragePath = async () => {
+  const targetPath = startupDbPath.value.trim()
+  const currentPath = storageDbPath.value.trim()
+  if (!targetPath) return { ok: false, error: '请先选择数据文件路径' }
+  if (normalizeStoragePathForCompare(targetPath) === normalizeStoragePathForCompare(currentPath)) {
+    return { ok: true, changed: false }
+  }
+  const setRes = await window.lightterm.appSetStorageFolder({ folder: targetPath })
+  if (!setRes.ok) return { ok: false, error: setRes.error || '未知错误' }
+  startupGateError.value = '数据文件路径已设置，应用正在重启...'
+  await window.lightterm.appRestart()
+  return { ok: true, changed: true }
+}
+
+const runUseExistingStorage = async () => {
+  if (startupGateBusy.value) return
+  startupGateBusy.value = true
+  startupGateError.value = ''
+  try {
+    const result = await applyStartupStoragePath()
+    if (!result.ok || result.changed) {
+      if (!result.ok) startupGateError.value = `数据文件路径设置失败：${result.error}`
+      return
+    }
+    await checkVault()
+    if (!vaultInitialized.value) {
+      startupGateError.value = '当前文件不是已初始化的数据文件，请重新选择，或者改为初始化新数据库。'
+    }
+  } finally {
+    startupGateBusy.value = false
+  }
+}
+
 const runStartupInit = async () => {
   if (startupGateBusy.value) return
   if (!startupDbPath.value.trim()) {
@@ -1921,16 +1960,9 @@ const runStartupInit = async () => {
   startupGateBusy.value = true
   startupGateError.value = ''
   try {
-    const targetPath = startupDbPath.value.trim()
-    const currentPath = storageDbPath.value.trim()
-    if (targetPath && normalizeStoragePathForCompare(targetPath) !== normalizeStoragePathForCompare(currentPath)) {
-      const setRes = await window.lightterm.appSetStorageFolder({ folder: targetPath })
-      if (!setRes.ok) {
-        startupGateError.value = `数据文件路径设置失败：${setRes.error || '未知错误'}`
-        return
-      }
-      startupGateError.value = '数据文件路径已设置，应用正在重启...'
-      await window.lightterm.appRestart()
+    const result = await applyStartupStoragePath()
+    if (!result.ok || result.changed) {
+      if (!result.ok) startupGateError.value = `数据文件路径设置失败：${result.error}`
       return
     }
 
@@ -2003,12 +2035,31 @@ const checkVault = async () => {
     const res = await window.lightterm.vaultStatus()
     vaultInitialized.value = !!res.initialized
     vaultUnlocked.value = !!res.unlocked
+    if (!res.configured) {
+      startupGateMode.value = 'select'
+      startupGateVisible.value = true
+      startupGateError.value = '请先选择是初始化新数据库，还是使用已有数据库。'
+      return
+    }
+    ensureStartupDbPath()
+    if (res.error) {
+      startupGateMode.value = 'select'
+      startupGateVisible.value = true
+      startupGateError.value = `数据文件读取失败：${res.error}`
+      return
+    }
+    if (!res.exists) {
+      startupGateMode.value = 'select'
+      startupGateVisible.value = true
+      startupGateError.value = '当前路径还没有数据文件。首次使用请选择初始化；如果你要使用已有数据库，请重新选择正确文件。'
+      return
+    }
     evaluateVaultGate()
   } catch (error) {
     bridgeReady.value = false
     vaultInitialized.value = false
     vaultUnlocked.value = false
-    startupGateMode.value = 'init'
+    startupGateMode.value = 'select'
     startupGateVisible.value = true
     vaultStatus.value = `❌ 读取密钥仓库状态失败：${formatAppError(error)}`
   }
@@ -2236,13 +2287,15 @@ const refreshStorageInfo = async () => {
       if (!storagePathInput.value && storageDbPath.value) storagePathInput.value = storageDbPath.value
     }
     if (meta.ok) {
+      if (!meta.configured) {
+        storageMetaText.value = '尚未选择数据文件。首次启动请先选择“初始化新数据库”或“使用已有数据库”。'
+        return
+      }
       const modified = meta.mtimeMs ? new Date(meta.mtimeMs).toLocaleString() : '-'
       const kb = Math.max(0, Number(meta.size || 0)) / 1024
       const encrypted = meta.encrypted ? '已加密' : '未加密'
-      const pathInfo = meta.usingFallback
-        ? `当前读取：${meta.dbPath || '-'}（已降级） ｜ 目标共享：${meta.preferredDbPath || '-'}`
-        : `当前读取：${meta.dbPath || '-'}`
-      storageMetaText.value = `${pathInfo} ｜ 文件：${meta.exists ? '存在' : '不存在'} ｜ 大小：${kb.toFixed(1)} KB ｜ 修改时间：${modified} ｜ 数据：主机 ${meta.hosts || 0} / 片段 ${meta.snippets || 0} / 密钥 ${meta.vaultKeys || 0} ｜ 加密：${encrypted} ｜ 格式：v${meta.storageVersion || 1}`
+      const fileState = meta.exists ? '存在' : '不存在'
+      storageMetaText.value = `当前读取：${meta.dbPath || '-'} ｜ 文件：${fileState} ｜ 大小：${kb.toFixed(1)} KB ｜ 修改时间：${modified} ｜ 数据：主机 ${meta.hosts || 0} / 片段 ${meta.snippets || 0} / 密钥 ${meta.vaultKeys || 0} ｜ 加密：${encrypted} ｜ 格式：v${meta.storageVersion || 1}`
     }
   } catch (error) {
     startupGateError.value = `读取数据文件路径失败：${formatAppError(error)}`
@@ -2357,7 +2410,7 @@ onMounted(async () => {
     await checkVault()
   } catch (error) {
     startupGateError.value = `启动检查失败：${formatAppError(error)}`
-    if (startupGateMode.value === 'loading') startupGateMode.value = 'init'
+    if (startupGateMode.value === 'loading') startupGateMode.value = 'select'
   }
 
   restoreSshTabs()
@@ -2976,6 +3029,20 @@ onBeforeUnmount(() => {
     <div v-if="startupGateVisible" class="startup-overlay">
       <div class="startup-card">
         <h3 v-if="startupGateMode === 'loading'">正在检查密钥仓库...</h3>
+        <template v-else-if="startupGateMode === 'select'">
+          <h3>选择数据文件</h3>
+          <p>安装完成后，请先决定是初始化一个新数据库，还是直接使用已有数据库文件。</p>
+          <div class="grid startup-db-grid">
+            <input v-model="startupDbPath" placeholder="数据路径（可选目录或 .json/.db 文件）" />
+            <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbPath">选择文件</button>
+            <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbFolder">选择目录</button>
+            <button class="ghost" :disabled="startupGateBusy" @click="useCurrentDbPath">使用当前路径</button>
+          </div>
+          <div class="grid startup-auth-grid">
+            <button class="muted" :disabled="startupGateBusy" @click="beginStartupInit">初始化新数据库</button>
+            <button :disabled="startupGateBusy" @click="runUseExistingStorage">使用已有数据库</button>
+          </div>
+        </template>
         <template v-else-if="startupGateMode === 'init'">
           <h3>首次启动：初始化数据文件与密码</h3>
           <p>请先确定数据文件路径，然后设置主密码完成初始化。</p>

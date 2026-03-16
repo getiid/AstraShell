@@ -31,7 +31,6 @@ let runtimeCleanupReason = ''
 let suppressWindowAllClosedQuit = false
 let macAutoInstallSupport = null
 let activeDbPath = ''
-let preferredDbPath = ''
 let dbWatchTimer = null
 const DATA_FILE_NAME = 'astrashell.data.json'
 const LEGACY_DB_FILE_NAME = 'lightterm.db'
@@ -143,7 +142,7 @@ function resolveDbPath() {
     }
     return normalizeStoragePath(legacy)
   }
-  return normalizeStoragePath(path.join(app.getPath('userData'), DATA_FILE_NAME))
+  return ''
 }
 
 function isStorageFilePath(inputPath) {
@@ -162,6 +161,20 @@ function getStorageDirFromPath(inputPath) {
   const raw = String(inputPath || '').trim()
   if (!raw) return ''
   return isStorageFilePath(raw) ? path.dirname(raw) : raw
+}
+
+function getStorageSuggestionPath() {
+  const configuredPath = resolveDbPath()
+  if (configuredPath) return configuredPath
+  return path.join(app.getPath('documents'), DATA_FILE_NAME)
+}
+
+function storageFileExists(filePath) {
+  try {
+    return !!(filePath && fs.existsSync(filePath))
+  } catch {
+    return false
+  }
 }
 
 function readJsonFile(filePath) {
@@ -646,33 +659,46 @@ async function withSftp(payload, handler) {
 }
 
 function openDbAtPath(filePath, { migrateLegacy = false } = {}) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true })
   if (migrateLegacy) migrateLegacyDbFileIfNeeded(filePath)
   const nextDb = new JsonDB(filePath)
   nextDb.setEncryptionKey(vaultKey)
   return nextDb
 }
 
+function requireDbReady({ allowCreate = false } = {}) {
+  const dbPath = resolveDbPath()
+  if (!dbPath) throw new Error('请先选择数据文件')
+  if (!allowCreate && !storageFileExists(dbPath)) {
+    throw new Error('数据文件不存在，请重新选择或先初始化')
+  }
+  activeDbPath = dbPath
+  if (!db || db.filePath !== dbPath) db = openDbAtPath(dbPath, { migrateLegacy: true })
+  db.setEncryptionKey(vaultKey)
+  return db
+}
+
 function initDb() {
   const dbPath = resolveDbPath()
-  preferredDbPath = dbPath
-  activeDbPath = dbPath
+  activeDbPath = dbPath || ''
   const settings = readSettings()
   if (!settings.dataPath && settings.dbPath && /[\\/]lightterm\.db$/i.test(String(settings.dbPath))) {
     settings.dataPath = dbPath
     delete settings.dbPath
     writeSettings(settings)
   }
+  if (!dbPath) {
+    db = null
+    vaultKey = null
+    return
+  }
   try {
     db = openDbAtPath(dbPath, { migrateLegacy: true })
-    db.save()
   } catch (e) {
-    const fallback = path.join(app.getPath('userData'), DATA_FILE_NAME)
-    activeDbPath = fallback
-    db = openDbAtPath(fallback)
-    db.save()
-    logMain(`initDb fallback active preferred=${dbPath} fallback=${fallback} error=${e?.message || e}`)
+    db = null
+    logMain(`initDb failed path=${dbPath} error=${e?.message || e}`)
   }
+
+  if (!db) return
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS hosts (
@@ -726,16 +752,17 @@ function initDb() {
 }
 
 function refreshDbFromDisk(reason = 'manual', force = false) {
-  if (!db) return false
+  const dbPath = resolveDbPath()
+  if (!dbPath) return false
   try {
-    if (force) tryPromotePreferredDb(`${reason}:force`)
+    const currentDb = requireDbReady()
     let changed = false
     if (force) {
-      const prevSignature = db.lastFileSignature
-      db.load()
-      changed = prevSignature !== db.lastFileSignature
+      const prevSignature = currentDb.lastFileSignature
+      currentDb.load()
+      changed = prevSignature !== currentDb.lastFileSignature
     } else {
-      changed = db.reloadIfChanged()
+      changed = currentDb.reloadIfChanged()
     }
     if (changed) logMain(`db refreshed from disk reason=${reason}`)
     return changed
@@ -745,35 +772,11 @@ function refreshDbFromDisk(reason = 'manual', force = false) {
   }
 }
 
-function tryPromotePreferredDb(reason = 'poll') {
-  if (!preferredDbPath || !db || preferredDbPath === activeDbPath) return false
-  try {
-    const preferredDb = openDbAtPath(preferredDbPath, { migrateLegacy: true })
-    if (preferredDb.encryptedPayload && vaultKey) preferredDb.applyDecryptedPayload()
-    if (preferredDb.encryptedPayload && !vaultKey) return false
-    if (db.encryptedPayload && vaultKey) db.applyDecryptedPayload()
-    if (db.encryptedPayload && !vaultKey) return false
-
-    preferredDb.data = mergeDbData(preferredDb.data, db.data)
-    preferredDb.setEncryptionKey(vaultKey)
-    preferredDb.save()
-
-    db = preferredDb
-    activeDbPath = preferredDbPath
-    logMain(`db switched back to preferred path reason=${reason} path=${preferredDbPath}`)
-    return true
-  } catch (e) {
-    logMain(`db switch to preferred failed reason=${reason} path=${preferredDbPath} error=${e?.message || e}`)
-    return false
-  }
-}
-
 function startDbWatchTimer() {
   if (dbWatchTimer) clearInterval(dbWatchTimer)
   dbWatchTimer = setInterval(() => {
-    const switched = tryPromotePreferredDb('poll')
     const changed = refreshDbFromDisk('poll', false)
-    if (switched || changed) {
+    if (changed) {
       broadcast('storage:data-changed', { changedAt: Date.now() })
     }
   }, 1800)
@@ -781,7 +784,8 @@ function startDbWatchTimer() {
 }
 
 function getStorageMeta() {
-  const dbPath = activeDbPath || resolveDbPath()
+  const dbPath = resolveDbPath() || activeDbPath || ''
+  const currentDb = db?.filePath === dbPath ? db : null
   let exists = false
   let size = 0
   let mtimeMs = 0
@@ -794,17 +798,16 @@ function getStorageMeta() {
     }
   } catch {}
   return {
+    configured: !!dbPath,
     dbPath,
-    preferredDbPath: preferredDbPath || dbPath,
-    usingFallback: !!preferredDbPath && preferredDbPath !== dbPath,
     exists,
     size,
     mtimeMs,
-    encrypted: !!db?.encryptedPayload,
-    storageVersion: Number(db?.data?.storage_version || 1),
-    hosts: Array.isArray(db?.data?.hosts) ? db.data.hosts.length : 0,
-    snippets: Array.isArray(db?.data?.snippets) ? db.data.snippets.length : 0,
-    vaultKeys: Array.isArray(db?.data?.vault_keys) ? db.data.vault_keys.length : 0,
+    encrypted: !!currentDb?.encryptedPayload,
+    storageVersion: Number(currentDb?.data?.storage_version || 1),
+    hosts: Array.isArray(currentDb?.data?.hosts) ? currentDb.data.hosts.length : 0,
+    snippets: Array.isArray(currentDb?.data?.snippets) ? currentDb.data.snippets.length : 0,
+    vaultKeys: Array.isArray(currentDb?.data?.vault_keys) ? currentDb.data.vault_keys.length : 0,
   }
 }
 
@@ -1252,8 +1255,8 @@ app.on('before-quit', () => {
 })
 
 ipcMain.handle('app:get-storage', async () => {
-  const dbPath = activeDbPath || resolveDbPath()
-  return { ok: true, dbPath }
+  const dbPath = resolveDbPath() || activeDbPath || ''
+  return { ok: true, configured: !!dbPath, dbPath }
 })
 
 ipcMain.handle('app:get-storage-meta', async () => {
@@ -1273,7 +1276,7 @@ ipcMain.handle('app:pick-storage-folder', async () => {
 
 ipcMain.handle('app:pick-storage-file', async () => {
   const win = BrowserWindow.getFocusedWindow()
-  const currentPath = preferredDbPath || activeDbPath || resolveDbPath()
+  const currentPath = activeDbPath || resolveDbPath() || getStorageSuggestionPath()
   const defaultPath = isStorageFilePath(currentPath)
     ? currentPath
     : path.join(getStorageDirFromPath(currentPath), DATA_FILE_NAME)
@@ -1294,7 +1297,9 @@ ipcMain.handle('app:set-storage-folder', async (_event, payload) => {
   settings.dataPath = nextDbPath
   delete settings.dbPath
   writeSettings(settings)
-  preferredDbPath = nextDbPath
+  activeDbPath = nextDbPath
+  db = null
+  vaultKey = null
   return { ok: true, dbPath: nextDbPath, restartRequired: true }
 })
 
@@ -1375,81 +1380,116 @@ ipcMain.handle('update:install', async () => {
 })
 
 ipcMain.handle('hosts:list', async () => {
-  refreshDbFromDisk('hosts:list')
-  return { ok: true, items: db.prepare('SELECT * FROM hosts ORDER BY updated_at DESC').all() }
+  try {
+    refreshDbFromDisk('hosts:list')
+    const currentDb = requireDbReady()
+    return { ok: true, items: currentDb.prepare('SELECT * FROM hosts ORDER BY updated_at DESC').all() }
+  } catch (e) {
+    return { ok: false, error: e?.message || '数据文件不可用', items: [] }
+  }
 })
 
 ipcMain.handle('hosts:save', async (_event, payload) => {
-  refreshDbFromDisk('hosts:save', true)
-  const now = Date.now()
-  const id = payload.id || uuidv4()
-  db.prepare(`
+  try {
+    refreshDbFromDisk('hosts:save', true)
+    const currentDb = requireDbReady()
+    const now = Date.now()
+    const id = payload.id || uuidv4()
+    currentDb.prepare(`
     INSERT INTO hosts (id, name, host, port, username, auth_type, password, private_key_ref, tags, created_at, updated_at)
     VALUES (@id, @name, @host, @port, @username, @auth_type, @password, @private_key_ref, @tags, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       name=excluded.name,host=excluded.host,port=excluded.port,username=excluded.username,
       auth_type=excluded.auth_type,password=excluded.password,private_key_ref=excluded.private_key_ref,
       tags=excluded.tags,updated_at=excluded.updated_at
-  `).run({
-    id,
-    name: payload.name || payload.host,
-    host: payload.host,
-    port: Number(payload.port || 22),
-    username: payload.username,
-    auth_type: payload.authType || 'password',
-    password: payload.password || null,
-    private_key_ref: payload.privateKeyRef || null,
-    category: payload.category || '默认',
-    tags: JSON.stringify(payload.tags || []),
-    created_at: now,
-    updated_at: now,
-  })
-  return { ok: true, id }
+    `).run({
+      id,
+      name: payload.name || payload.host,
+      host: payload.host,
+      port: Number(payload.port || 22),
+      username: payload.username,
+      auth_type: payload.authType || 'password',
+      password: payload.password || null,
+      private_key_ref: payload.privateKeyRef || null,
+      category: payload.category || '默认',
+      tags: JSON.stringify(payload.tags || []),
+      created_at: now,
+      updated_at: now,
+    })
+    return { ok: true, id }
+  } catch (e) {
+    return { ok: false, error: e?.message || '保存主机失败' }
+  }
 })
 
 ipcMain.handle('hosts:delete', async (_event, payload) => {
-  refreshDbFromDisk('hosts:delete', true)
-  db.prepare('DELETE FROM hosts WHERE id = ?').run(payload.id)
-  return { ok: true }
+  try {
+    refreshDbFromDisk('hosts:delete', true)
+    const currentDb = requireDbReady()
+    currentDb.prepare('DELETE FROM hosts WHERE id = ?').run(payload.id)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e?.message || '删除主机失败' }
+  }
 })
 
 ipcMain.handle('snippets:get-state', async () => {
-  refreshDbFromDisk('snippets:get-state', true)
-  recoverSnippetsFromSiblingFilesIfNeeded()
-  const normalized = normalizeSnippetStateForRead({
-    items: db.data.snippets,
-    snippet_meta: db.data.snippet_meta,
-  })
-  const items = Array.isArray(db.data.snippets)
-    ? normalized.items
-    : []
-  const extraCategories = normalized.extraCategories
-  return { ok: true, items, extraCategories }
+  try {
+    refreshDbFromDisk('snippets:get-state', true)
+    const currentDb = requireDbReady()
+    const normalized = normalizeSnippetStateForRead({
+      items: currentDb.data.snippets,
+      snippet_meta: currentDb.data.snippet_meta,
+    })
+    const items = Array.isArray(currentDb.data.snippets)
+      ? normalized.items
+      : []
+    const extraCategories = normalized.extraCategories
+    return { ok: true, items, extraCategories }
+  } catch (e) {
+    return { ok: false, error: e?.message || '读取代码片段失败', items: [], extraCategories: [] }
+  }
 })
 
 ipcMain.handle('snippets:set-state', async (_event, payload) => {
-  refreshDbFromDisk('snippets:set-state', true)
-  const normalized = normalizeSnippetState(payload)
-  db.data.snippets = normalized.items
-  db.data.snippet_meta = {
-    extra_categories: normalized.extraCategories,
-    updated_at: normalized.updatedAt,
+  try {
+    refreshDbFromDisk('snippets:set-state', true)
+    const currentDb = requireDbReady()
+    const normalized = normalizeSnippetState(payload)
+    currentDb.data.snippets = normalized.items
+    currentDb.data.snippet_meta = {
+      extra_categories: normalized.extraCategories,
+      updated_at: normalized.updatedAt,
+    }
+    currentDb.save()
+    return { ok: true, items: normalized.items, extraCategories: normalized.extraCategories }
+  } catch (e) {
+    return { ok: false, error: e?.message || '保存代码片段失败', items: [], extraCategories: [] }
   }
-  db.save()
-  return { ok: true, items: normalized.items, extraCategories: normalized.extraCategories }
 })
 
 ipcMain.handle('vault:status', async () => {
-  refreshDbFromDisk('vault:status', true)
-  const row = db.prepare('SELECT id FROM vault_meta WHERE id = 1').get()
-  const state = { ok: true, initialized: !!row, unlocked: !!vaultKey }
-  logMain(`vault:status initialized=${state.initialized} unlocked=${state.unlocked}`)
-  return state
+  const dbPath = resolveDbPath()
+  if (!dbPath) return { ok: true, configured: false, exists: false, initialized: false, unlocked: false }
+  if (!storageFileExists(dbPath)) return { ok: true, configured: true, exists: false, initialized: false, unlocked: false }
+  try {
+    refreshDbFromDisk('vault:status', true)
+    const currentDb = requireDbReady()
+    const row = currentDb.prepare('SELECT id FROM vault_meta WHERE id = 1').get()
+    const state = { ok: true, configured: true, exists: true, initialized: !!row, unlocked: !!vaultKey }
+    logMain(`vault:status initialized=${state.initialized} unlocked=${state.unlocked}`)
+    return state
+  } catch (e) {
+    const error = e?.message || '数据文件无法读取'
+    logMain(`vault:status error=${error}`)
+    return { ok: true, configured: true, exists: true, initialized: false, unlocked: false, error }
+  }
 })
 
 ipcMain.handle('vault:set-master', async (_event, payload) => {
   try {
     refreshDbFromDisk('vault:set-master', true)
+    const currentDb = requireDbReady({ allowCreate: true })
     const pwd = String(payload?.masterPassword || '')
     if (!pwd || pwd.length < 1) return { ok: false, error: '主密码不能为空' }
 
@@ -1457,9 +1497,9 @@ ipcMain.handle('vault:set-master', async (_event, payload) => {
     const key = deriveKey(pwd, salt)
     const verifierHash = crypto.createHash('sha256').update(key).digest('base64')
     vaultKey = key
-    db.setEncryptionKey(vaultKey)
-    db.prepare('INSERT OR REPLACE INTO vault_meta (id, salt, verifier_hash, updated_at) VALUES (1, ?, ?, ?)').run(salt.toString('base64'), verifierHash, Date.now())
-    db.save()
+    currentDb.setEncryptionKey(vaultKey)
+    currentDb.prepare('INSERT OR REPLACE INTO vault_meta (id, salt, verifier_hash, updated_at) VALUES (1, ?, ?, ?)').run(salt.toString('base64'), verifierHash, Date.now())
+    currentDb.save()
     logMain('vault:set-master ok')
     return { ok: true }
   } catch (e) {
@@ -1471,20 +1511,21 @@ ipcMain.handle('vault:set-master', async (_event, payload) => {
 ipcMain.handle('vault:unlock', async (_event, payload) => {
   try {
     refreshDbFromDisk('vault:unlock', true)
+    const currentDb = requireDbReady()
     const pwd = String(payload?.masterPassword || '')
     if (!pwd) return { ok: false, error: '请输入主密码' }
 
-    const meta = db.prepare('SELECT * FROM vault_meta WHERE id = 1').get()
+    const meta = currentDb.prepare('SELECT * FROM vault_meta WHERE id = 1').get()
     if (!meta) return { ok: false, error: '密钥仓库未初始化' }
 
     const key = deriveKey(pwd, Buffer.from(meta.salt, 'base64'))
     if (crypto.createHash('sha256').update(key).digest('base64') !== meta.verifier_hash) return { ok: false, error: '主密码错误' }
     vaultKey = key
-    db.setEncryptionKey(vaultKey)
-    if (db.encryptedPayload && !db.applyDecryptedPayload()) {
+    currentDb.setEncryptionKey(vaultKey)
+    if (currentDb.encryptedPayload && !currentDb.applyDecryptedPayload()) {
       return { ok: false, error: '数据文件解密失败，请确认当前使用的是同一份数据文件' }
     }
-    db.save()
+    currentDb.save()
     logMain('vault:unlock ok')
     return { ok: true }
   } catch (e) {
@@ -1496,10 +1537,11 @@ ipcMain.handle('vault:unlock', async (_event, payload) => {
 ipcMain.handle('vault:reset', async () => {
   try {
     refreshDbFromDisk('vault:reset', true)
-    db.data.vault_meta = null
-    db.data.vault_keys = []
-    db.setEncryptionKey(null)
-    db.save()
+    const currentDb = requireDbReady()
+    currentDb.data.vault_meta = null
+    currentDb.data.vault_keys = []
+    currentDb.setEncryptionKey(null)
+    currentDb.save()
     vaultKey = null
     logMain('vault:reset ok')
     return { ok: true }
@@ -1509,68 +1551,73 @@ ipcMain.handle('vault:reset', async () => {
 })
 
 ipcMain.handle('vault:key-save', async (_event, payload) => {
-  refreshDbFromDisk('vault:key-save', true)
-  if (!vaultKey) return { ok: false, error: '密钥仓库未解锁' }
-  const sshpk = await getSshpk()
-  const id = payload.id || uuidv4()
-  const privateKeyText = String(payload.privateKey || '').trim()
-  const publicKeyText = String(payload.publicKey || '').trim()
-  const certificateText = String(payload.certificate || '').trim()
-  if (!privateKeyText && !publicKeyText && !certificateText) {
-    return { ok: false, error: '请至少填写私钥/公钥/证书中的一项' }
-  }
-
-  let resolvedType = payload.type || 'auto'
-  let keyObj = null
-  if (privateKeyText) {
-    try {
-      if (!payload.type || payload.type === 'auto') {
-        try {
-          keyObj = sshpk.parsePrivateKey(privateKeyText, 'putty')
-          resolvedType = 'ppk'
-        } catch {
-          try {
-            keyObj = sshpk.parsePrivateKey(privateKeyText, 'pem')
-            resolvedType = 'pem'
-          } catch {
-            keyObj = sshpk.parsePrivateKey(privateKeyText, 'auto')
-            resolvedType = 'openssh'
-          }
-        }
-      } else {
-        keyObj = sshpk.parsePrivateKey(privateKeyText, payload.type === 'ppk' ? 'putty' : payload.type)
-      }
-    } catch {
-      return { ok: false, error: '无法识别私钥格式，请检查内容是否完整' }
-    }
-  } else if (!payload.type || payload.type === 'auto') {
-    resolvedType = publicKeyText && certificateText ? 'bundle' : publicKeyText ? 'public' : 'certificate'
-  }
-
-  const enc = encryptText(JSON.stringify({
-    privateKey: privateKeyText,
-    publicKey: publicKeyText,
-    certificate: certificateText,
-  }), vaultKey)
-  let fp = payload.fingerprint || null
   try {
-    fp = keyObj?.toPublic().fingerprint('sha256').toString() || null
-  } catch {}
+    refreshDbFromDisk('vault:key-save', true)
+    const currentDb = requireDbReady()
+    if (!vaultKey) return { ok: false, error: '密钥仓库未解锁' }
+    const sshpk = await getSshpk()
+    const id = payload.id || uuidv4()
+    const privateKeyText = String(payload.privateKey || '').trim()
+    const publicKeyText = String(payload.publicKey || '').trim()
+    const certificateText = String(payload.certificate || '').trim()
+    if (!privateKeyText && !publicKeyText && !certificateText) {
+      return { ok: false, error: '请至少填写私钥/公钥/证书中的一项' }
+    }
 
-  db.prepare(`
+    let resolvedType = payload.type || 'auto'
+    let keyObj = null
+    if (privateKeyText) {
+      try {
+        if (!payload.type || payload.type === 'auto') {
+          try {
+            keyObj = sshpk.parsePrivateKey(privateKeyText, 'putty')
+            resolvedType = 'ppk'
+          } catch {
+            try {
+              keyObj = sshpk.parsePrivateKey(privateKeyText, 'pem')
+              resolvedType = 'pem'
+            } catch {
+              keyObj = sshpk.parsePrivateKey(privateKeyText, 'auto')
+              resolvedType = 'openssh'
+            }
+          }
+        } else {
+          keyObj = sshpk.parsePrivateKey(privateKeyText, payload.type === 'ppk' ? 'putty' : payload.type)
+        }
+      } catch {
+        return { ok: false, error: '无法识别私钥格式，请检查内容是否完整' }
+      }
+    } else if (!payload.type || payload.type === 'auto') {
+      resolvedType = publicKeyText && certificateText ? 'bundle' : publicKeyText ? 'public' : 'certificate'
+    }
+
+    const enc = encryptText(JSON.stringify({
+      privateKey: privateKeyText,
+      publicKey: publicKeyText,
+      certificate: certificateText,
+    }), vaultKey)
+    let fp = payload.fingerprint || null
+    try {
+      fp = keyObj?.toPublic().fingerprint('sha256').toString() || null
+    } catch {}
+
+    currentDb.prepare(`
     INSERT INTO vault_keys (id, name, type, fingerprint, encrypted_blob, created_at, updated_at)
     VALUES (@id,@name,@type,@fingerprint,@encrypted_blob,@created_at,@updated_at)
     ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,fingerprint=excluded.fingerprint,encrypted_blob=excluded.encrypted_blob,updated_at=excluded.updated_at
-  `).run({
-    id,
-    name: payload.name || '未命名密钥',
-    type: resolvedType,
-    fingerprint: fp,
-    encrypted_blob: JSON.stringify(enc),
-    created_at: Date.now(),
-    updated_at: Date.now(),
-  })
-  return { ok: true, id, detectedType: resolvedType }
+    `).run({
+      id,
+      name: payload.name || '未命名密钥',
+      type: resolvedType,
+      fingerprint: fp,
+      encrypted_blob: JSON.stringify(enc),
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    })
+    return { ok: true, id, detectedType: resolvedType }
+  } catch (e) {
+    return { ok: false, error: e?.message || '保存密钥失败' }
+  }
 })
 
 ipcMain.handle('vault:key-import-file', async () => {
@@ -1601,25 +1648,35 @@ ipcMain.handle('vault:key-import-file', async () => {
 })
 
 ipcMain.handle('vault:key-list', async () => {
-  refreshDbFromDisk('vault:key-list')
-  return { ok: true, items: db.prepare('SELECT id, name, type, fingerprint, created_at, updated_at FROM vault_keys ORDER BY updated_at DESC').all() }
+  try {
+    refreshDbFromDisk('vault:key-list')
+    const currentDb = requireDbReady()
+    return { ok: true, items: currentDb.prepare('SELECT id, name, type, fingerprint, created_at, updated_at FROM vault_keys ORDER BY updated_at DESC').all() }
+  } catch (e) {
+    return { ok: false, error: e?.message || '读取密钥列表失败', items: [] }
+  }
 })
 
 ipcMain.handle('vault:key-get', async (_event, payload) => {
-  refreshDbFromDisk('vault:key-get')
-  if (!vaultKey) return { ok: false, error: '密钥仓库未解锁' }
-  const row = db.prepare('SELECT * FROM vault_keys WHERE id = ?').get(payload.id)
-  if (!row) return { ok: false, error: '密钥不存在' }
-  const raw = decryptText(JSON.parse(row.encrypted_blob), vaultKey)
-  let parsed = { privateKey: '', publicKey: '', certificate: '' }
   try {
-    const obj = JSON.parse(raw)
-    if (obj && typeof obj === 'object') parsed = { ...parsed, ...obj }
-    else parsed.privateKey = raw
-  } catch {
-    parsed.privateKey = raw
+    refreshDbFromDisk('vault:key-get')
+    const currentDb = requireDbReady()
+    if (!vaultKey) return { ok: false, error: '密钥仓库未解锁' }
+    const row = currentDb.prepare('SELECT * FROM vault_keys WHERE id = ?').get(payload.id)
+    if (!row) return { ok: false, error: '密钥不存在' }
+    const raw = decryptText(JSON.parse(row.encrypted_blob), vaultKey)
+    let parsed = { privateKey: '', publicKey: '', certificate: '' }
+    try {
+      const obj = JSON.parse(raw)
+      if (obj && typeof obj === 'object') parsed = { ...parsed, ...obj }
+      else parsed.privateKey = raw
+    } catch {
+      parsed.privateKey = raw
+    }
+    return { ok: true, item: { id: row.id, name: row.name, type: row.type, ...parsed } }
+  } catch (e) {
+    return { ok: false, error: e?.message || '读取密钥失败' }
   }
-  return { ok: true, item: { id: row.id, name: row.name, type: row.type, ...parsed } }
 })
 
 ipcMain.handle('sync:login', async () => {

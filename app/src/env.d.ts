@@ -5,8 +5,8 @@ type SSHConfig = { host: string; port?: number; username: string; password?: str
 declare global {
   interface Window {
     lightterm: {
-      appGetStorage: () => Promise<{ ok: boolean; dbPath?: string }>
-      appGetStorageMeta: () => Promise<{ ok: boolean; dbPath?: string; preferredDbPath?: string; usingFallback?: boolean; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; storageVersion?: number; hosts?: number; snippets?: number; vaultKeys?: number }>
+      appGetStorage: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string }>
+      appGetStorageMeta: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; storageVersion?: number; hosts?: number; snippets?: number; vaultKeys?: number }>
       appPickStorageFolder: () => Promise<{ ok: boolean; folder?: string; error?: string }>
       appPickStorageFile: () => Promise<{ ok: boolean; filePath?: string; error?: string }>
       appSetStorageFolder: (payload: { folder: string }) => Promise<{ ok: boolean; dbPath?: string; restartRequired?: boolean; error?: string }>
@@ -27,7 +27,7 @@ declare global {
       snippetsGetState: () => Promise<{ ok: boolean; items?: any[]; extraCategories?: string[]; error?: string }>
       snippetsSetState: (payload: { items: any[]; extraCategories: string[] }) => Promise<{ ok: boolean; items?: any[]; extraCategories?: string[]; error?: string }>
 
-      vaultStatus: () => Promise<{ ok: boolean; initialized: boolean; unlocked: boolean }>
+      vaultStatus: () => Promise<{ ok: boolean; configured?: boolean; exists?: boolean; initialized: boolean; unlocked: boolean; error?: string }>
       vaultSetMaster: (payload: { masterPassword: string }) => Promise<{ ok: boolean; error?: string }>
       vaultUnlock: (payload: { masterPassword: string }) => Promise<{ ok: boolean; error?: string }>
       vaultReset: () => Promise<{ ok: boolean; error?: string }>
