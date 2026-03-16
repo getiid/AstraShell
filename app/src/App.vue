@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { Server, FolderTree, Cable, KeyRound, Settings, Pencil } from 'lucide-vue-next'
+import { Server, FolderTree, Cable, KeyRound, Settings, Pencil, Eye, EyeOff } from 'lucide-vue-next'
 import '@xterm/xterm/css/xterm.css'
 
 type NavKey = 'hosts' | 'sftp' | 'snippets' | 'serial' | 'vault' | 'settings'
@@ -17,6 +17,7 @@ const SNIPPET_ALL_CATEGORY = '全部'
 const TERMINAL_ENCODING_STORAGE_KEY = 'astrashell.terminal.encoding'
 
 const sshForm = ref({ host: '', port: 22, username: 'root', password: '' })
+const quickConnectInput = ref('')
 const authType = ref<'password' | 'key'>('password')
 const selectedKeyRef = ref('')
 const sshStatus = ref('')
@@ -35,6 +36,7 @@ const hostCategory = ref(DEFAULT_CATEGORY)
 const hostItems = ref<any[]>([])
 const selectedHostId = ref('')
 const editingHost = ref<any | null>(null)
+const editPasswordVisible = ref(false)
 const hostEditorVisible = ref(false)
 const selectedCategory = ref(ALL_CATEGORY)
 const hostKeyword = ref('')
@@ -56,6 +58,85 @@ const notify = (ok: boolean, message: string) => {
     window.alert(`❌ ${message}`)
   }
 }
+
+const formatQuickConnectValue = (host: { host?: string; username?: string; port?: number }) => {
+  const username = String(host?.username || 'root').trim() || 'root'
+  const address = String(host?.host || '').trim()
+  const port = Number(host?.port || 22)
+  if (!address) return ''
+  return port && port !== 22 ? `${username}@${address}:${port}` : `${username}@${address}`
+}
+
+type QuickConnectParseResult =
+  | { ok: true; username: string; host: string; port: number }
+  | { ok: false; error: string }
+
+const parseQuickConnectInput = (rawValue: string): QuickConnectParseResult => {
+  const raw = String(rawValue || '').trim().replace(/^ssh\s+/i, '')
+  if (!raw) return { ok: false, error: '请输入 SSH 地址，例如 root@1.2.3.4' }
+  if (/\s/.test(raw)) return { ok: false, error: '快速连接仅支持 user@host 或 user@host:port' }
+
+  let username = 'root'
+  let hostPart = raw
+  const atIndex = raw.lastIndexOf('@')
+  if (atIndex >= 0) {
+    username = raw.slice(0, atIndex).trim() || 'root'
+    hostPart = raw.slice(atIndex + 1).trim()
+  }
+  if (!hostPart) return { ok: false, error: '缺少主机地址' }
+
+  let host = hostPart
+  let port = 22
+  const colonIndex = hostPart.lastIndexOf(':')
+  if (colonIndex > 0 && hostPart.indexOf(':') === colonIndex) {
+    const maybePort = Number(hostPart.slice(colonIndex + 1))
+    if (!Number.isFinite(maybePort) || maybePort <= 0) return { ok: false, error: '端口格式无效' }
+    host = hostPart.slice(0, colonIndex).trim()
+    port = maybePort
+  }
+  if (!host) return { ok: false, error: '缺少主机地址' }
+  return { ok: true, username, host, port }
+}
+
+const syncQuickConnectForm = () => {
+  const parsed = parseQuickConnectInput(quickConnectInput.value)
+  if (!parsed.ok) {
+    sshStatus.value = parsed.error
+    return false
+  }
+  const selectedHost = hostItems.value.find((item) => item.id === selectedHostId.value)
+  const selectedTarget = selectedHost ? formatQuickConnectValue(selectedHost) : ''
+  sshForm.value.host = parsed.host
+  sshForm.value.port = parsed.port
+  sshForm.value.username = parsed.username
+  if (selectedHost && quickConnectInput.value.trim() === selectedTarget) {
+    hostName.value = selectedHost.name || `${parsed.username}@${parsed.host}`
+    hostCategory.value = selectedHost.category || DEFAULT_CATEGORY
+    authType.value = selectedHost.auth_type === 'key' ? 'key' : 'password'
+    selectedKeyRef.value = selectedHost.private_key_ref || ''
+  } else {
+    selectedHostId.value = ''
+    hostName.value = `${parsed.username}@${parsed.host}`
+    hostCategory.value = DEFAULT_CATEGORY
+    authType.value = 'password'
+    selectedKeyRef.value = ''
+  }
+  return true
+}
+
+const createEmptyHostEditor = () => ({
+  id: '',
+  name: '',
+  host: '',
+  port: 22,
+  username: 'root',
+  password: '',
+  category: DEFAULT_CATEGORY,
+  authType: 'password',
+  privateKeyRef: '',
+  purchaseDate: '',
+  expiryDate: '',
+})
 
 const hostCategories = computed(() => {
   const set = new Set<string>([DEFAULT_CATEGORY])
@@ -146,12 +227,18 @@ const selectedLocalFile = ref('')
 const leftPanelMode = ref<'local' | 'remote'>('local')
 const leftConnectPanelOpen = ref(false)
 const leftConnectTarget = ref<string>('local')
+const leftConnectCategory = ref(ALL_CATEGORY)
+const leftConnectKeyword = ref('')
 const leftSftpHostId = ref('')
 const leftSftpPath = ref('.')
 const leftSftpRows = ref<any[]>([])
 const rightPanelMode = ref<'remote' | 'local'>('remote')
+const rightConnectCategory = ref(ALL_CATEGORY)
+const rightConnectKeyword = ref('')
 const rightLocalPath = ref('')
 const rightLocalRows = ref<any[]>([])
+const leftFileKeyword = ref('')
+const rightFileKeyword = ref('')
 const localSortBy = ref<'name' | 'createdAt' | 'modifiedAt'>('name')
 const remoteSortBy = ref<'name' | 'createdAt' | 'modifiedAt'>('name')
 
@@ -191,6 +278,52 @@ const sortedLocalRows = computed(() => sortFsRows(localRows.value, localSortBy.v
 const sortedSftpRows = computed(() => sortFsRows(sftpRows.value, remoteSortBy.value))
 const sortedLeftSftpRows = computed(() => sortFsRows(leftSftpRows.value, localSortBy.value))
 const sortedRightLocalRows = computed(() => sortFsRows(rightLocalRows.value, remoteSortBy.value))
+
+const filterFsRowsByKeyword = (rows: any[], keyword: string, nameKey: 'name' | 'filename') => {
+  const q = String(keyword || '').trim().toLowerCase()
+  if (!q) return rows
+  return rows.filter((item) => String(item?.[nameKey] || '').toLowerCase().includes(q))
+}
+
+const leftDisplayRows = computed(() => {
+  const source = leftPanelMode.value === 'local' ? sortedLocalRows.value : sortedLeftSftpRows.value
+  return filterFsRowsByKeyword(source, leftFileKeyword.value, leftPanelMode.value === 'local' ? 'name' : 'filename')
+})
+
+const rightDisplayRows = computed(() => {
+  const source = rightPanelMode.value === 'remote' ? sortedSftpRows.value : sortedRightLocalRows.value
+  return filterFsRowsByKeyword(source, rightFileKeyword.value, rightPanelMode.value === 'remote' ? 'filename' : 'name')
+})
+
+const groupHostsByCategory = (categoryFilter: string, keyword: string) => {
+  const normalizedKeyword = String(keyword || '').trim().toLowerCase()
+  const grouped = new Map<string, any[]>()
+  hostItems.value.forEach((host) => {
+    const category = String(host?.category || DEFAULT_CATEGORY).trim() || DEFAULT_CATEGORY
+    if (categoryFilter !== ALL_CATEGORY && category !== categoryFilter) return
+    if (normalizedKeyword) {
+      const hit = [host?.name, host?.host, host?.username, category]
+        .some((value) => String(value || '').toLowerCase().includes(normalizedKeyword))
+      if (!hit) return
+    }
+    if (!grouped.has(category)) grouped.set(category, [])
+    grouped.get(category)!.push(host)
+  })
+
+  return [...grouped.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], 'zh-Hans-CN'))
+    .map(([category, items]) => ({
+      category,
+      items: [...items].sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), 'zh-Hans-CN')),
+    }))
+}
+
+const leftConnectGroups = computed(() => groupHostsByCategory(leftConnectCategory.value, leftConnectKeyword.value))
+const rightConnectGroups = computed(() => groupHostsByCategory(rightConnectCategory.value, rightConnectKeyword.value))
+
+const sftpTransferModeLabel = computed(() => (rightPanelMode.value === 'remote' ? 'SFTP 双向' : '本地浏览'))
+const leftPanelStateLabel = computed(() => (leftPanelMode.value === 'local' ? '本地' : '远程'))
+const rightPanelStateLabel = computed(() => (rightPanelMode.value === 'local' ? '本地' : '远程'))
 
 const hostLabelById = (id: string) => {
   const host = hostItems.value.find((h) => h.id === id)
@@ -1132,6 +1265,7 @@ const connectSSH = async (optionsOrEvent?: { keepNav?: boolean } | Event) => {
 }
 
 const connectSSHFromHosts = async () => {
+  if (!syncQuickConnectForm()) return
   if (sshConnected.value) {
     const label = (hostName.value || sshForm.value.host || '新会话').trim()
     createSshTab(label)
@@ -1273,6 +1407,7 @@ const refreshHosts = async (options: { probe?: boolean } = {}) => {
   }
 }
 const saveCurrentHost = async () => {
+  if (!syncQuickConnectForm()) return
   const res = await window.lightterm.hostsSave({
     name: hostName.value || sshForm.value.host,
     category: hostCategory.value || DEFAULT_CATEGORY,
@@ -1293,6 +1428,7 @@ const useHost = (h: any) => {
   sshForm.value.port = h.port
   sshForm.value.username = h.username
   sshForm.value.password = h.password || ''
+  quickConnectInput.value = formatQuickConnectValue(h)
   hostName.value = h.name
   hostCategory.value = h.category || DEFAULT_CATEGORY
   authType.value = h.auth_type === 'key' ? 'key' : 'password'
@@ -1300,6 +1436,7 @@ const useHost = (h: any) => {
 }
 const openHostEditor = (h: any) => {
   useHost(h)
+  editPasswordVisible.value = false
   editingHost.value = {
     id: h.id,
     name: h.name,
@@ -1314,6 +1451,13 @@ const openHostEditor = (h: any) => {
     expiryDate: h.expiryDate || '',
   }
   hostEditorVisible.value = true
+}
+
+const openCreateHostEditor = () => {
+  selectedHostId.value = ''
+  hostEditorVisible.value = true
+  editPasswordVisible.value = false
+  editingHost.value = createEmptyHostEditor()
 }
 
 const openHostTerminal = async (h: any) => {
@@ -1436,6 +1580,22 @@ const loadLeftSftp = async () => {
     return
   }
   leftSftpRows.value = res.items || []
+}
+
+const toggleLeftConnectPanel = () => {
+  leftConnectPanelOpen.value = !leftConnectPanelOpen.value
+  if (!leftConnectPanelOpen.value) return
+  leftConnectCategory.value = ALL_CATEGORY
+  leftConnectKeyword.value = ''
+  leftConnectTarget.value = leftPanelMode.value === 'local' ? 'local' : leftSftpHostId.value
+}
+
+const toggleRightConnectPanel = () => {
+  rightConnectPanelOpen.value = !rightConnectPanelOpen.value
+  if (!rightConnectPanelOpen.value) return
+  rightConnectCategory.value = ALL_CATEGORY
+  rightConnectKeyword.value = ''
+  rightConnectTarget.value = rightPanelMode.value === 'local' ? 'local' : sftpHostId.value
 }
 
 const connectLeftPanel = async () => {
@@ -2537,11 +2697,7 @@ onBeforeUnmount(() => {
             <p class="hosts-header-sub">快速筛选主机并在右侧编辑详情</p>
           </div>
           <div class="hosts-quick-connect">
-            <input v-model="hostName" placeholder="连接名称" />
-            <input v-model="sshForm.host" placeholder="主机/IP" />
-            <input v-model.number="sshForm.port" type="number" placeholder="端口" />
-            <input v-model="sshForm.username" placeholder="用户名" />
-            <input v-model="sshForm.password" type="password" placeholder="密码（可选）" />
+            <input v-model="quickConnectInput" placeholder="SSH 快速连接，例如 root@1.2.3.4 或 admin@1.2.3.4:22" @keyup.enter="connectSSHFromHosts" />
             <button class="ghost small" @click="saveCurrentHost">保存</button>
             <button class="muted small" @click="connectSSHFromHosts">连接</button>
           </div>
@@ -2568,6 +2724,7 @@ onBeforeUnmount(() => {
               <button class="ghost tiny" :disabled="hostProbeRunning || filteredHosts.length === 0" @click="probeFilteredHosts">
                 {{ hostProbeRunning ? '检测中...' : '检测当前列表' }}
               </button>
+              <button class="muted tiny" @click="openCreateHostEditor">新建服务器</button>
               <span class="hosts-stat">显示 {{ filteredHosts.length }} / {{ hostItems.length }} 台主机</span>
             </div>
             <div class="host-grid">
@@ -2624,7 +2781,13 @@ onBeforeUnmount(() => {
                       <option value="password">密码认证</option>
                       <option value="key">密钥认证</option>
                     </select>
-                    <input v-if="editingHost.authType === 'password'" v-model="editingHost.password" type="password" placeholder="密码" />
+                    <div v-if="editingHost.authType === 'password'" class="password-field">
+                      <input v-model="editingHost.password" :type="editPasswordVisible ? 'text' : 'password'" placeholder="密码" />
+                      <button class="icon-btn password-toggle" type="button" :title="editPasswordVisible ? '隐藏密码' : '显示密码'" @click="editPasswordVisible = !editPasswordVisible">
+                        <EyeOff v-if="editPasswordVisible" :size="14" />
+                        <Eye v-else :size="14" />
+                      </button>
+                    </div>
                     <select v-else v-model="editingHost.privateKeyRef">
                       <option value="">选择密钥</option>
                       <option v-for="k in vaultItems" :key="k.id" :value="k.id">{{ k.name }} ({{ k.type }})</option>
@@ -2657,19 +2820,31 @@ onBeforeUnmount(() => {
 
       <section v-else-if="!focusTerminal && nav === 'sftp'" class="panel sftp-panel">
         <h3>SFTP 文件传输</h3>
-        <p>{{ sftpStatus }} ｜ {{ sftpConnected ? '已连接' : '未连接' }} ｜ 传输模式：二进制</p>
+        <div class="sftp-status-line">
+          <span class="status-pill" :class="{ online: sftpConnected }">{{ sftpConnected ? '已连接' : '未连接' }}</span>
+          <span class="status-pill mode">{{ sftpTransferModeLabel }}</span>
+          <span class="status-pill plain">{{ sftpStatus || '就绪' }}</span>
+        </div>
         <div class="split-head">
           <div class="head-left">
-            <span class="path-chip">
-              <b>左侧连接</b>
+            <article class="path-chip">
+              <header>
+                <b>左侧连接</b>
+                <em>{{ leftPanelStateLabel }}</em>
+              </header>
               <span>{{ leftLinkLabel }}</span>
               <small>{{ leftPanelMode === 'local' ? leftLocalPathDisplay : leftSftpPath }}</small>
-            </span>
-            <span class="path-chip">
-              <b>右侧连接</b>
+              <i>共 {{ leftDisplayRows.length }} 项</i>
+            </article>
+            <article class="path-chip">
+              <header>
+                <b>右侧连接</b>
+                <em>{{ rightPanelStateLabel }}</em>
+              </header>
               <span>{{ rightLinkLabel }}</span>
               <small>{{ rightPanelMode === 'local' ? rightLocalPathDisplay : sftpPath }}</small>
-            </span>
+              <i>共 {{ rightDisplayRows.length }} 项</i>
+            </article>
           </div>
         </div>
 
@@ -2680,7 +2855,7 @@ onBeforeUnmount(() => {
               <div class="file-head-actions">
                 <button class="ghost small" @click="localGoUp">上一级</button>
                 <button class="ghost small" @click="leftPanelMode === 'local' ? loadLocalFs() : loadLeftSftp()">刷新</button>
-                <button class="ghost small" @click="leftConnectPanelOpen = !leftConnectPanelOpen">链接</button>
+                <button class="ghost small" @click="toggleLeftConnectPanel">链接</button>
                 <select v-model="localSortBy" class="file-sort">
                   <option value="name">A-Z 排序</option>
                   <option value="createdAt">创建时间</option>
@@ -2689,15 +2864,27 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div v-if="leftConnectPanelOpen" class="connect-inline">
+              <div class="connect-filters">
+                <select v-model="leftConnectCategory">
+                  <option :value="ALL_CATEGORY">全部分类</option>
+                  <option v-for="c in hostCategories" :key="`left-cat-${c}`" :value="c">{{ c }}</option>
+                </select>
+                <input v-model="leftConnectKeyword" placeholder="搜索服务器/IP/用户名" />
+              </div>
               <select v-model="leftConnectTarget">
                 <option value="local">本地目录</option>
-                <option v-for="h in hostItems" :key="h.id" :value="h.id">{{ h.name }} ({{ h.host }})</option>
+                <optgroup v-for="group in leftConnectGroups" :key="`left-group-${group.category}`" :label="group.category">
+                  <option v-for="h in group.items" :key="h.id" :value="h.id">{{ h.name }} ({{ h.host }})</option>
+                </optgroup>
               </select>
               <button @click="connectLeftPanel">切换左侧</button>
             </div>
+            <div class="file-search-row">
+              <input v-model="leftFileKeyword" placeholder="筛选当前左侧文件列表" />
+            </div>
             <div class="file-stack">
               <div
-                v-for="l in (leftPanelMode === 'local' ? sortedLocalRows : sortedLeftSftpRows)"
+                v-for="l in leftDisplayRows"
                 :key="leftPanelMode === 'local' ? l.path : l.filename"
                 class="file-row"
                 :class="{ 'is-dir': l.isDir, active: leftPanelMode === 'local' ? selectedLocalFile === l.path : selectedRemoteFile === l.filename }"
@@ -2714,7 +2901,7 @@ onBeforeUnmount(() => {
                   <span>{{ formatFsTime(leftPanelMode === 'local' ? l.modifiedAt : (l.modifiedAt || l.mtime)) }}</span>
                 </div>
               </div>
-              <div v-if="(leftPanelMode === 'local' ? sortedLocalRows.length : sortedLeftSftpRows.length) === 0" class="file-row empty">目录空</div>
+              <div v-if="leftDisplayRows.length === 0" class="file-row empty">目录空</div>
             </div>
           </div>
           <div @dragover.prevent @drop="onRightDrop" class="file-panel remote-panel">
@@ -2724,7 +2911,7 @@ onBeforeUnmount(() => {
                 <button class="ghost small" @click="remoteGoUp">上一级</button>
                 <button class="ghost small" @click="loadSftp">刷新</button>
                 <button v-if="rightPanelMode === 'remote'" class="ghost small" @click="promptMkdirSftp">新建目录</button>
-                <button class="ghost small" @click="rightConnectTarget = rightPanelMode === 'local' ? 'local' : sftpHostId; rightConnectPanelOpen = !rightConnectPanelOpen">链接</button>
+                <button class="ghost small" @click="toggleRightConnectPanel">链接</button>
                 <select v-model="remoteSortBy" class="file-sort">
                   <option value="name">A-Z 排序</option>
                   <option value="createdAt">创建时间</option>
@@ -2733,15 +2920,27 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div v-if="rightConnectPanelOpen" class="connect-inline">
+              <div class="connect-filters">
+                <select v-model="rightConnectCategory">
+                  <option :value="ALL_CATEGORY">全部分类</option>
+                  <option v-for="c in hostCategories" :key="`right-cat-${c}`" :value="c">{{ c }}</option>
+                </select>
+                <input v-model="rightConnectKeyword" placeholder="搜索服务器/IP/用户名" />
+              </div>
               <select v-model="rightConnectTarget">
                 <option value="local">本地目录</option>
-                <option v-for="h in hostItems" :key="h.id" :value="h.id">{{ h.name }} ({{ h.host }})</option>
+                <optgroup v-for="group in rightConnectGroups" :key="`right-group-${group.category}`" :label="group.category">
+                  <option v-for="h in group.items" :key="h.id" :value="h.id">{{ h.name }} ({{ h.host }})</option>
+                </optgroup>
               </select>
               <button @click="connectSftp">切换右侧</button>
             </div>
+            <div class="file-search-row">
+              <input v-model="rightFileKeyword" placeholder="筛选当前右侧文件列表" />
+            </div>
             <div class="file-stack">
               <div
-                v-for="r in (rightPanelMode === 'remote' ? sortedSftpRows : sortedRightLocalRows)"
+                v-for="r in rightDisplayRows"
                 :key="rightPanelMode === 'remote' ? r.filename : r.path"
                 class="file-row"
                 :class="{ 'is-dir': r.isDir, active: rightPanelMode === 'remote' ? selectedRemoteFile === r.filename : selectedLocalFile === r.path }"
@@ -2759,7 +2958,7 @@ onBeforeUnmount(() => {
                   <span>{{ r.isDir ? '' : formatFsTime(rightPanelMode === 'remote' ? (r.modifiedAt || r.mtime) : r.modifiedAt) }}</span>
                 </div>
               </div>
-              <div v-if="(rightPanelMode === 'remote' ? sortedSftpRows.length : sortedRightLocalRows.length) === 0" class="file-row empty">目录空</div>
+              <div v-if="rightDisplayRows.length === 0" class="file-row empty">目录空</div>
             </div>
           </div>
         </div>
@@ -3146,13 +3345,21 @@ button.tiny { padding: 4px 10px; font-size: 11px; }
 :deep(.xterm .xterm-rows) { cursor: text; }
 textarea::selection,
 input::selection { background: #bfdbfe; color: #0f172a; }
-.split-head { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin:8px 0 10px; }
-.head-left { display:flex; gap:8px; flex:1; }
+.sftp-status-line { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+.status-pill { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 999px; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; font-size: 12px; }
+.status-pill.online { background: #dcfce7; border-color: #86efac; color: #166534; }
+.status-pill.mode { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; }
+.status-pill.plain { background: #f1f5f9; color: #475569; }
+.split-head { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin:2px 0 10px; }
+.head-left { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; flex:1; }
 .head-right { position:relative; }
-.path-chip { display:flex; flex-direction:column; gap:2px; padding:6px 10px; border:1px solid #d0d8e2; border-radius:10px; background:#eef3f8; color:#334155; font-size:12px; max-width:48%; min-width:0; }
+.path-chip { display:flex; flex-direction:column; gap:4px; padding:8px 10px; border:1px solid #d0d8e2; border-radius:12px; background:linear-gradient(180deg, #f8fbff 0%, #edf3f9 100%); color:#334155; font-size:12px; min-width:0; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7); }
+.path-chip header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .path-chip b { font-size:11px; color:#475569; font-weight:700; }
+.path-chip em { font-style: normal; font-size: 11px; color: #2563eb; border: 1px solid #bfdbfe; background: #eff6ff; border-radius: 999px; padding: 1px 8px; }
 .path-chip span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
 .path-chip small { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#64748b; font-size:11px; }
+.path-chip i { font-style: normal; color: #64748b; font-size: 11px; }
 .connect-panel { position:absolute; right:0; top:38px; background:#fff; border:1px solid var(--border); border-radius:10px; padding:10px; display:grid; gap:8px; min-width:280px; z-index:20; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; flex: 1; overflow: hidden; }
 .split > div { border: 1px solid #dbe2ea; background: #f8fafc; border-radius: 10px; padding: 8px; display: flex; flex-direction: column; min-height: 0; }
@@ -3160,7 +3367,14 @@ input::selection { background: #bfdbfe; color: #0f172a; }
 .file-panel { background: rgba(255, 255, 255, 0.85); border: 1px solid rgba(15,23,42,0.08); border-radius: 16px; padding: 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.6); min-height: 0; }
 .file-panel-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .file-head-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
-.connect-inline { margin-top: 8px; padding: 8px; border: 1px solid #d3dce6; border-radius: 10px; background: #f8fbff; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.connect-inline { margin-top: 8px; padding: 10px; border: 1px solid #d3dce6; border-radius: 10px; background: #f8fbff; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.connect-inline > select { min-width: 0; background: #fff; }
+.connect-inline > button { margin-left: 0; white-space: nowrap; }
+.connect-filters { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 8px; min-width: 0; }
+.connect-filters input,
+.connect-filters select { width: 100%; min-width: 0; background: #fff; }
+.file-search-row { margin-top: 8px; }
+.file-search-row input { width: 100%; background: #fff; }
 .file-sort { min-width: 120px; padding: 6px 8px; font-size: 12px; }
 .file-stack { display:flex; flex-direction:column; gap: 8px; flex: 1; min-height: 0; overflow:auto; margin-top: 8px; }
 .file-row { display:flex; align-items:center; justify-content:space-between; gap: 12px; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; background: rgba(248, 250, 252, 0.8); transition: background 0.2s ease, border 0.2s ease; }
@@ -3168,10 +3382,10 @@ input::selection { background: #bfdbfe; color: #0f172a; }
 .file-row.active { border-color: var(--primary); background: rgba(37, 99, 235, 0.15); }
 .file-row:not(.empty):hover { background: rgba(59, 130, 246, 0.1); }
 .file-row.empty { justify-content:center; color: #94a3b8; background: transparent; border: 1px dashed rgba(15,23,42,0.2); }
-.file-info { display:flex; align-items:center; gap: 8px; font-weight: 600; font-size: 12px; }
+.file-info { display:flex; align-items:center; gap: 8px; font-weight: 400; font-size: 12px; }
 .file-icon { font-size: 14px; }
-.file-name { color: #0f172a; font-size: 12px; }
-.file-meta { display:flex; align-items:center; gap: 14px; font-size: 11px; color: #475569; }
+.file-name { color: #0f172a; font-size: 12px; font-weight: 400; }
+.file-meta { display:flex; align-items:center; gap: 14px; font-size: 11px; color: #475569; font-weight: 400; }
 .file-meta span { opacity: 0.8; display:inline-flex; gap: 6px; }
 .list { margin: 6px 0 0; padding-left: 18px; flex: 1; min-height: 0; overflow: auto; }
 .list li { display: flex; justify-content: space-between; padding-right: 8px; cursor: pointer; }
@@ -3179,9 +3393,12 @@ h4 { margin: 4px 0; font-size: 12px; font-weight: 600; }
 .hosts-header { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
 .hosts-header h3 { margin: 0; font-size: 19px; color: #111827; }
 .hosts-header-sub { color: #475569; font-size: 12px; margin: 0; }
-.hosts-quick-connect { display: grid; grid-template-columns: 1.1fr 1fr 88px 120px 1fr auto auto; gap: 8px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 12px; background: #eef3f7; }
+.hosts-quick-connect { display: grid; grid-template-columns: minmax(320px, 1fr) auto auto; gap: 8px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 12px; background: #eef3f7; }
 .hosts-quick-connect input { width: 100%; min-width: 0; background: #fff; }
 .hosts-quick-connect button { white-space: nowrap; margin-left: 0; }
+.password-field { display: flex; align-items: center; gap: 6px; width: 100%; }
+.password-field input { flex: 1; min-width: 0; }
+.password-toggle { flex-shrink: 0; }
 .hosts-layout.new-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr) auto; gap: 12px; align-items: stretch; flex: 1; min-height: 0; }
 .hosts-left { background: #e7edf2; border: 1px solid #cbd5e1; border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; }
 .hosts-left-title { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 13px; color: #1f2937; }
@@ -3351,9 +3568,11 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
   .snippets-editor-column { display: none; }
   .vault-layout { grid-template-columns: 1fr; }
   .vault-editor-column { width:auto; min-width:0; }
+  .split { grid-template-columns: 1fr; }
+  .head-left { grid-template-columns: 1fr; }
 }
 @media (max-width: 1080px) {
-  .hosts-quick-connect { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .hosts-quick-connect { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hosts-quick-connect button { grid-column: span 2; }
 }
 @media (max-width: 860px) {
@@ -3361,7 +3580,7 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
   .hosts-left { display: none; }
   .snippets-layout { grid-template-columns: 1fr; }
   .snippets-left { display: none; }
-  .hosts-quick-connect { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hosts-quick-connect { grid-template-columns: 1fr; }
   .hosts-quick-connect button { grid-column: span 1; }
   .terminal-actions-row { flex-direction: column; align-items: stretch; }
   .terminal-tools-right { margin-left: 0; }
@@ -3372,6 +3591,8 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
   .vault-toolbar { grid-template-columns: 1fr 1fr; }
   .startup-db-grid,
   .startup-auth-grid { grid-template-columns: 1fr; }
+  .connect-inline { grid-template-columns: 1fr; }
+  .connect-filters { grid-template-columns: 1fr; }
 }
 
 .hint { color: #6b7280; font-size: 12px; }
