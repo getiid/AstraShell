@@ -9,6 +9,7 @@ declare global {
       appGetStorageMeta: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; storageVersion?: number; hosts?: number; snippets?: number; vaultKeys?: number }>
       appPickStorageFolder: () => Promise<{ ok: boolean; folder?: string; error?: string }>
       appPickStorageFile: () => Promise<{ ok: boolean; filePath?: string; error?: string }>
+      appPickStorageSaveFile: () => Promise<{ ok: boolean; filePath?: string; error?: string }>
       appSetStorageFolder: (payload: { folder: string }) => Promise<{ ok: boolean; dbPath?: string; restartRequired?: boolean; error?: string }>
       appRestart: () => Promise<{ ok: boolean; error?: string }>
       appOpenExternal: (payload: { url: string }) => Promise<{ ok: boolean; error?: string }>

@@ -1897,6 +1897,14 @@ const pickStartupDbPath = async () => {
   }
 }
 
+const pickStartupDbSavePath = async () => {
+  const res = await window.lightterm.appPickStorageSaveFile()
+  if (res.ok && res.filePath) {
+    startupDbPath.value = res.filePath
+    startupGateError.value = ''
+  }
+}
+
 const pickStartupDbFolder = async () => {
   const res = await window.lightterm.appPickStorageFolder()
   if (res.ok && res.folder) {
@@ -3034,7 +3042,7 @@ onBeforeUnmount(() => {
           <p>安装完成后，请先决定是初始化一个新数据库，还是直接使用已有数据库文件。</p>
           <div class="grid startup-db-grid">
             <input v-model="startupDbPath" placeholder="数据路径（可选目录或 .json/.db 文件）" />
-            <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbPath">选择文件</button>
+            <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbPath">打开已有文件</button>
             <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbFolder">选择目录</button>
             <button class="ghost" :disabled="startupGateBusy" @click="useCurrentDbPath">使用当前路径</button>
           </div>
@@ -3048,7 +3056,7 @@ onBeforeUnmount(() => {
           <p>请先确定数据文件路径，然后设置主密码完成初始化。</p>
           <div class="grid startup-db-grid">
             <input v-model="startupDbPath" placeholder="数据路径（可选目录或 .json/.db 文件）" />
-            <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbPath">选择文件</button>
+            <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbSavePath">新建文件</button>
             <button class="muted" :disabled="startupGateBusy" @click="pickStartupDbFolder">选择目录</button>
             <button class="ghost" :disabled="startupGateBusy" @click="useCurrentDbPath">使用当前路径</button>
           </div>

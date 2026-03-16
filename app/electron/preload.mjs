@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('lightterm', {
   appGetStorageMeta: () => ipcRenderer.invoke('app:get-storage-meta'),
   appPickStorageFolder: () => ipcRenderer.invoke('app:pick-storage-folder'),
   appPickStorageFile: () => ipcRenderer.invoke('app:pick-storage-file'),
+  appPickStorageSaveFile: () => ipcRenderer.invoke('app:pick-storage-save-file'),
   appSetStorageFolder: (payload) => ipcRenderer.invoke('app:set-storage-folder', payload),
   appRestart: () => ipcRenderer.invoke('app:restart'),
   appOpenExternal: (payload) => ipcRenderer.invoke('app:open-external', payload),

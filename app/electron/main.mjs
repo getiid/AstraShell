@@ -1277,11 +1277,25 @@ ipcMain.handle('app:pick-storage-folder', async () => {
 ipcMain.handle('app:pick-storage-file', async () => {
   const win = BrowserWindow.getFocusedWindow()
   const currentPath = activeDbPath || resolveDbPath() || getStorageSuggestionPath()
+  const defaultDir = getStorageDirFromPath(currentPath) || app.getPath('documents')
+  const picked = await dialog.showOpenDialog(win, {
+    title: '选择已有共享数据文件',
+    defaultPath: defaultDir,
+    properties: ['openFile'],
+    filters: [{ name: 'AstraShell Data', extensions: ['json', 'db'] }],
+  })
+  if (picked.canceled || !picked.filePaths?.[0]) return { ok: false, error: '已取消' }
+  return { ok: true, filePath: picked.filePaths[0] }
+})
+
+ipcMain.handle('app:pick-storage-save-file', async () => {
+  const win = BrowserWindow.getFocusedWindow()
+  const currentPath = activeDbPath || resolveDbPath() || getStorageSuggestionPath()
   const defaultPath = isStorageFilePath(currentPath)
     ? currentPath
     : path.join(getStorageDirFromPath(currentPath), DATA_FILE_NAME)
   const picked = await dialog.showSaveDialog(win, {
-    title: '选择共享数据文件（建议同一个 .json 文件）',
+    title: '新建共享数据文件',
     defaultPath,
     filters: [{ name: 'AstraShell Data', extensions: ['json', 'db'] }],
   })
