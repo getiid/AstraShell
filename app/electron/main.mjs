@@ -6,6 +6,11 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { v4 as uuidv4 } from 'uuid'
+import { safeParse, setStorageFolderSchema } from './ipc/schemas.mjs'
+import { registerLocalFsIpc } from './ipc/localfs.mjs'
+import { registerLocalIpc } from './ipc/local.mjs'
+import { registerSftpIpc } from './ipc/sftp.mjs'
+import { registerSshIpc } from './ipc/ssh.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -1151,15 +1156,22 @@ function applyLocalShellRuntimeEnv(shellCmd, env) {
   return env
 }
 
-function buildShellColorInitScript() {
-  return [
+function buildShellColorInitScript(shellCmd) {
+  if (process.platform === 'win32') return ''
+  const shellName = path.basename(String(shellCmd || '')).toLowerCase()
+  if (!shellName.includes('zsh') && !shellName.includes('bash') && !shellName.endsWith('sh')) return ''
+
+  const base = [
     'export TERM="${TERM:-xterm-256color}"',
     'export CLICOLOR=1',
     'export CLICOLOR_FORCE=1',
-    '_astrashell_ls(){ command ls --color=auto "$@" 2>/dev/null || command ls -G "$@"; }',
-    'ls(){ _astrashell_ls "$@"; }',
-    'll(){ _astrashell_ls -alF "$@"; }',
-  ].join('; ')
+  ]
+
+  if (shellName.includes('zsh')) {
+    return [...base, "alias ll='ls -alF'"].join('; ')
+  }
+
+  return [...base, "alias ll='ls -alF'"] .join('; ')
 }
 
 function closeLocalShellSession(sessionId, reason = 'manual') {
@@ -1713,8 +1725,9 @@ ipcMain.handle('app:pick-storage-save-file', async () => {
 })
 
 ipcMain.handle('app:set-storage-folder', async (_event, payload) => {
-  if (!payload?.folder) return { ok: false, error: '缺少路径' }
-  const nextDbPath = normalizeStoragePath(payload.folder)
+  const parsed = safeParse(setStorageFolderSchema, payload)
+  if (!parsed.ok) return { ok: false, error: parsed.error }
+  const nextDbPath = normalizeStoragePath(parsed.data.folder)
   if (!nextDbPath) return { ok: false, error: '路径无效' }
   const settings = readSettings()
   settings.dataPath = nextDbPath
@@ -2261,397 +2274,40 @@ ipcMain.handle('serial:close', async (_event, payload) => {
   })
 })
 
-ipcMain.handle('local:connect', async (_event, payload) => {
-  const sessionId = String(payload?.sessionId || '').trim()
-  if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-  closeLocalShellSession(sessionId, 'reconnect')
-  const shellCmd = getLocalShellCommand()
-  const options = buildShellSpawnOptions(String(payload?.cwd || '').trim())
-  applyLocalShellRuntimeEnv(shellCmd, options.env)
-  try {
-    const ptySpawn = await getNodePtySpawn()
-    const args = process.platform === 'win32' ? [] : ['-i', '-l']
-    const proc = ptySpawn(shellCmd, args, {
-      cwd: options.cwd,
-      env: options.env,
-      cols: Number(payload?.cols || 120),
-      rows: Number(payload?.rows || 30),
-      name: process.platform === 'win32' ? 'xterm-color' : 'xterm-256color',
-    })
-    const target = '本地终端'
-    const sessionRef = { proc, target, silentClose: false }
-    localShellSessions.set(sessionId, sessionRef)
-    localInputBuffers.set(sessionId, '')
-    localOutputBuffers.set(sessionId, '')
-    const localColorInit = buildShellColorInitScript()
-    setTimeout(() => {
-      try { proc.write(`${localColorInit}\r`) } catch {}
-    }, 120)
-    proc.onData((chunk) => {
-      const text = String(chunk || '')
-      const buffer = Buffer.from(text, 'utf8')
-      broadcast('local:data', {
-        sessionId,
-        data: text,
-        dataBase64: buffer.toString('base64'),
-      })
-      logOutputLines(localOutputBuffers, sessionId, text, 'local', target)
-    })
-    proc.onExit(({ exitCode, signal }) => {
-      const active = localShellSessions.get(sessionId)
-      if (active !== sessionRef) {
-        localInputBuffers.delete(sessionId)
-        localOutputBuffers.delete(sessionId)
-        return
-      }
-      localShellSessions.delete(sessionId)
-      localInputBuffers.delete(sessionId)
-      localOutputBuffers.delete(sessionId)
-      flushResponseLogsForSession('local', sessionId)
-      if (sessionRef.silentClose) return
-      broadcast('local:close', { sessionId, code: Number(exitCode || 0), signal: String(signal || '') })
-      appendAuditLog({
-        source: 'local',
-        action: 'disconnect',
-        target: sessionRef.target || target,
-        content: `终端已退出（code=${Number(exitCode || 0)}）`,
-      })
-    })
-    appendAuditLog({ source: 'local', action: 'connect', target, content: `连接成功（目录：${options.cwd}）` })
-    return { ok: true, shell: shellCmd, cwd: options.cwd }
-  } catch (e) {
-    const message = e?.message || '启动本地终端失败'
-    appendAuditLog({ source: 'local', action: 'error', target: shellCmd, content: message, level: 'error' })
-    return { ok: false, error: message }
-  }
+registerLocalIpc(ipcMain, {
+  getLocalShellCommand,
+  buildShellSpawnOptions,
+  applyLocalShellRuntimeEnv,
+  getNodePtySpawn,
+  closeLocalShellSession,
+  appendAuditLog,
+  broadcast,
+  logOutputLines,
+  flushResponseLogsForSession,
+  logCommandLines,
+  localShellSessions,
+  localInputBuffers,
+  localOutputBuffers,
 })
 
-ipcMain.handle('local:write', async (_event, payload) => {
-  const sessionId = String(payload?.sessionId || '').trim()
-  const session = localShellSessions.get(sessionId)
-  if (!session) return { ok: false, error: '本地终端会话不存在' }
-  const data = String(payload?.data || '')
-  if (!data) return { ok: true }
-  try {
-    session.proc?.write?.(data)
-  } catch {
-    return { ok: false, error: '写入本地终端失败' }
-  }
-  logCommandLines(localInputBuffers, sessionId, data, 'local', session.target || sessionId)
-  return { ok: true }
+registerSshIpc(ipcMain, {
+  createSSHClient,
+  attachKeyboardHandler,
+  connectConfigFromPayload,
+  buildShellColorInitScript,
+  appendAuditLog,
+  broadcast,
+  logOutputLines,
+  flushResponseLogsForSession,
+  logCommandLines,
+  sshSessions,
+  sshInputBuffers,
+  sshOutputBuffers,
 })
 
-ipcMain.handle('local:resize', async (_event, payload) => {
-  const sessionId = String(payload?.sessionId || '').trim()
-  const session = localShellSessions.get(sessionId)
-  if (!session) return { ok: false, error: '本地终端会话不存在' }
-  const cols = Math.max(20, Number(payload?.cols || 120))
-  const rows = Math.max(8, Number(payload?.rows || 30))
-  try {
-    session.proc?.resize?.(cols, rows)
-    return { ok: true }
-  } catch {
-    return { ok: false, error: '调整终端尺寸失败' }
-  }
+registerLocalFsIpc(ipcMain)
+
+registerSftpIpc(ipcMain, {
+  withSftp,
+  broadcast,
 })
-
-ipcMain.handle('local:disconnect', async (_event, payload) => {
-  const sessionId = String(payload?.sessionId || '').trim()
-  if (!sessionId) return { ok: true }
-  closeLocalShellSession(sessionId, 'manual')
-  return { ok: true }
-})
-
-ipcMain.handle('ssh:test', async (_event, config) => {
-  const conn = await createSSHClient()
-  return await new Promise((resolve) => {
-    attachKeyboardHandler(conn, config.password)
-    conn.on('ready', () => { conn.end(); resolve({ ok: true }) }).on('error', (err) => resolve({ ok: false, error: err.message })).connect(connectConfigFromPayload(config))
-  })
-})
-
-ipcMain.handle('ssh:connect', async (_event, payload) => {
-  const sessionId = payload.sessionId
-  if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-  const targetBase = `${String(payload?.username || '').trim() || 'user'}@${String(payload?.host || '').trim()}:${Number(payload?.port || 22)}`
-  const displayName = String(payload?.displayName || '').trim()
-  const target = displayName ? `${displayName} (${targetBase})` : targetBase
-  const existing = sshSessions.get(sessionId)
-  if (existing) {
-    existing.silentClose = true
-    try { existing.stream.end('exit\n') } catch {}
-    try { existing.conn.end() } catch {}
-    sshSessions.delete(sessionId)
-    sshInputBuffers.delete(sessionId)
-    sshOutputBuffers.delete(sessionId)
-  }
-  const conn = await createSSHClient()
-  attachKeyboardHandler(conn, payload.password)
-  return await new Promise((resolve) => {
-    let settled = false
-    const finish = (value) => {
-      if (settled) return
-      settled = true
-      resolve(value)
-    }
-    conn.on('ready', () => {
-      conn.shell({ term: 'xterm-256color', cols: 120, rows: 30 }, (err, stream) => {
-        if (err) return finish({ ok: false, error: err.message })
-        const sessionRef = { conn, stream, target, silentClose: false }
-        sshSessions.set(sessionId, sessionRef)
-        sshOutputBuffers.set(sessionId, '')
-        stream.on('data', (chunk) => {
-          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-          const text = buffer.toString('utf8')
-          broadcast('ssh:data', {
-            sessionId,
-            data: text,
-            dataBase64: buffer.toString('base64'),
-          })
-          logOutputLines(sshOutputBuffers, sessionId, text, 'ssh', target)
-        })
-        stream.on('close', () => {
-          const active = sshSessions.get(sessionId)
-          if (active === sessionRef) {
-            sshSessions.delete(sessionId)
-            sshInputBuffers.delete(sessionId)
-            sshOutputBuffers.delete(sessionId)
-            flushResponseLogsForSession('ssh', sessionId)
-          }
-          if (sessionRef.silentClose) {
-            conn.end()
-            return
-          }
-          broadcast('ssh:close', { sessionId })
-          appendAuditLog({ source: 'ssh', action: 'disconnect', target, content: '远程会话已关闭' })
-          conn.end()
-        })
-        const sshColorInit = buildShellColorInitScript()
-        setTimeout(() => {
-          try { stream.write(`${sshColorInit}\n`) } catch {}
-        }, 80)
-        appendAuditLog({ source: 'ssh', action: 'connect', target, content: '连接成功' })
-        finish({ ok: true })
-      })
-    }).on('error', (err) => {
-      const message = err?.message || 'SSH 连接失败'
-      appendAuditLog({ source: 'ssh', action: 'error', target, content: message, level: 'error' })
-      broadcast('ssh:error', { sessionId, error: message })
-      finish({ ok: false, error: message })
-    }).connect(connectConfigFromPayload(payload))
-  })
-})
-
-ipcMain.handle('ssh:write', async (_event, payload) => {
-  const session = sshSessions.get(payload.sessionId)
-  if (!session) return { ok: false, error: 'SSH 会话不存在' }
-  const sessionId = String(payload.sessionId || '')
-  const data = String(payload.data || '')
-  session.stream.write(data)
-  const target = String(session?.target || `${session?.conn?.config?.username || 'user'}@${session?.conn?.config?.host || 'host'}:${Number(session?.conn?.config?.port || 22)}`)
-  logCommandLines(sshInputBuffers, sessionId, data, 'ssh', target)
-  return { ok: true }
-})
-ipcMain.handle('ssh:resize', async (_event, payload) => {
-  const session = sshSessions.get(payload.sessionId)
-  if (!session) return { ok: false, error: 'SSH 会话不存在' }
-  session.stream.setWindow(payload.rows || 30, payload.cols || 120, 0, 0)
-  return { ok: true }
-})
-ipcMain.handle('ssh:disconnect', async (_event, payload) => {
-  const session = sshSessions.get(payload.sessionId)
-  if (!session) return { ok: true }
-  const target = String(session?.target || `${session?.conn?.config?.username || 'user'}@${session?.conn?.config?.host || 'host'}:${Number(session?.conn?.config?.port || 22)}`)
-  session.silentClose = true
-  session.stream.end('exit\n'); session.conn.end(); sshSessions.delete(payload.sessionId); sshInputBuffers.delete(payload.sessionId); sshOutputBuffers.delete(payload.sessionId)
-  flushResponseLogsForSession('ssh', payload.sessionId)
-  appendAuditLog({ source: 'ssh', action: 'disconnect', target, content: '用户手动断开' })
-  return { ok: true }
-})
-
-const listWindowsDriveRoots = () => {
-  const roots = []
-  for (let code = 65; code <= 90; code += 1) {
-    const letter = String.fromCharCode(code)
-    const driveRoot = `${letter}:\\`
-    try {
-      if (!fs.existsSync(driveRoot)) continue
-      roots.push({
-        name: `${letter}:`,
-        isDir: true,
-        path: driveRoot,
-        size: 0,
-        createdAt: 0,
-        modifiedAt: 0,
-      })
-    } catch {}
-  }
-  return roots
-}
-
-ipcMain.handle('localfs:list', async (_event, payload) => {
-  const requestedPath = typeof payload?.localPath === 'string' ? payload.localPath.trim() : ''
-  if (process.platform === 'win32' && !requestedPath) {
-    return { ok: true, path: '', items: listWindowsDriveRoots() }
-  }
-  const localPath = requestedPath || os.homedir()
-  try {
-    const entries = await fs.promises.readdir(localPath, { withFileTypes: true })
-    const STAT_THRESHOLD = 260
-    const shouldReadStats = entries.length <= STAT_THRESHOLD
-
-    let statsByName = new Map()
-    if (shouldReadStats) {
-      const stats = await Promise.all(entries.map(async (entry) => {
-        const fullPath = path.join(localPath, entry.name)
-        try {
-          const stat = await fs.promises.stat(fullPath)
-          return [entry.name, stat]
-        } catch {
-          return [entry.name, null]
-        }
-      }))
-      statsByName = new Map(stats)
-    }
-
-    const items = entries.map((entry) => {
-      const fullPath = path.join(localPath, entry.name)
-      const stat = shouldReadStats ? statsByName.get(entry.name) : null
-      return {
-        name: entry.name,
-        isDir: entry.isDirectory(),
-        path: fullPath,
-        size: stat?.size || 0,
-        createdAt: stat?.birthtimeMs || stat?.ctimeMs || 0,
-        modifiedAt: stat?.mtimeMs || 0,
-      }
-    })
-    return { ok: true, path: localPath, items }
-  } catch (e) {
-    return { ok: false, error: e?.message || '本地目录读取失败' }
-  }
-})
-
-ipcMain.handle('sftp:list', async (_event, payload) => withSftp(payload, async (sftp) => {
-  const remotePath = payload.remotePath || '.'
-  return await new Promise((resolve) => {
-    sftp.readdir(remotePath, (readErr, list) => {
-      if (readErr) return resolve({ ok: false, error: readErr.message })
-      const rows = (list || []).map((item) => ({
-        filename: item.filename,
-        longname: item.longname,
-        size: item.attrs?.size,
-        createdAt: item.attrs?.ctime || item.attrs?.mtime || 0,
-        mtime: item.attrs?.mtime,
-        modifiedAt: item.attrs?.mtime || 0,
-        isDir: !!(item.attrs?.mode && (item.attrs.mode & 0o40000)),
-      }))
-      resolve({ ok: true, items: rows })
-    })
-  })
-}))
-
-ipcMain.handle('sftp:download', async (_event, payload) => withSftp(payload, async (sftp) => {
-  const win = BrowserWindow.getFocusedWindow()
-  const save = await dialog.showSaveDialog(win, { title: '保存文件到本地', defaultPath: path.basename(payload.remoteFile || 'download.bin') })
-  if (save.canceled || !save.filePath) return { ok: false, error: '已取消' }
-
-  return await new Promise((resolve) => {
-    sftp.fastGet(
-      payload.remoteFile,
-      save.filePath,
-      {
-        step: (totalTransferred, _chunk, total) => {
-          const percent = total > 0 ? Math.min(100, Math.floor((totalTransferred / total) * 100)) : 0
-          broadcast('sftp:progress', { type: 'download', percent, transferred: totalTransferred, total })
-        },
-      },
-      (err) => {
-        if (err) return resolve({ ok: false, error: err.message })
-        broadcast('sftp:progress', { type: 'download', percent: 100, done: true })
-        resolve({ ok: true, filePath: save.filePath })
-      },
-    )
-  })
-}))
-
-ipcMain.handle('sftp:download-to-local', async (_event, payload) => withSftp(payload, async (sftp) => {
-  const filename = payload.filename || path.basename(payload.remoteFile || 'download.bin')
-  const localFile = path.join(payload.localDir || app.getPath('downloads'), filename)
-  return await new Promise((resolve) => {
-    sftp.fastGet(
-      payload.remoteFile,
-      localFile,
-      {
-        step: (totalTransferred, _chunk, total) => {
-          const percent = total > 0 ? Math.min(100, Math.floor((totalTransferred / total) * 100)) : 0
-          broadcast('sftp:progress', { type: 'download', percent, transferred: totalTransferred, total })
-        },
-      },
-      (err) => {
-        if (err) return resolve({ ok: false, error: err.message })
-        broadcast('sftp:progress', { type: 'download', percent: 100, done: true })
-        resolve({ ok: true, filePath: localFile })
-      },
-    )
-  })
-}))
-
-ipcMain.handle('sftp:mkdir', async (_event, payload) => withSftp(payload, async (sftp) => {
-  return await new Promise((resolve) => {
-    sftp.mkdir(payload.remoteDir, {}, (err) => {
-      if (err) return resolve({ ok: false, error: err.message })
-      resolve({ ok: true })
-    })
-  })
-}))
-
-ipcMain.handle('sftp:rename', async (_event, payload) => withSftp(payload, async (sftp) => {
-  return await new Promise((resolve) => {
-    sftp.rename(payload.oldPath, payload.newPath, (err) => {
-      if (err) return resolve({ ok: false, error: err.message })
-      resolve({ ok: true })
-    })
-  })
-}))
-
-ipcMain.handle('sftp:delete', async (_event, payload) => withSftp(payload, async (sftp) => {
-  return await new Promise((resolve) => {
-    sftp.unlink(payload.remoteFile, (err) => {
-      if (!err) return resolve({ ok: true })
-      sftp.rmdir(payload.remoteFile, (err2) => {
-        if (err2) return resolve({ ok: false, error: err2.message })
-        resolve({ ok: true })
-      })
-    })
-  })
-}))
-
-ipcMain.handle('sftp:upload', async (_event, payload) => withSftp(payload, async (sftp) => {
-  let localFile = payload.localFile
-  if (!localFile) {
-    const win = BrowserWindow.getFocusedWindow()
-    const pick = await dialog.showOpenDialog(win, { title: '选择本地文件上传', properties: ['openFile'] })
-    if (pick.canceled || !pick.filePaths?.[0]) return { ok: false, error: '已取消' }
-    localFile = pick.filePaths[0]
-  }
-  const remoteFile = `${payload.remoteDir || '.'}/${path.basename(localFile)}`
-
-  return await new Promise((resolve) => {
-    sftp.fastPut(
-      localFile,
-      remoteFile,
-      {
-        step: (totalTransferred, _chunk, total) => {
-          const percent = total > 0 ? Math.min(100, Math.floor((totalTransferred / total) * 100)) : 0
-          broadcast('sftp:progress', { type: 'upload', percent, transferred: totalTransferred, total })
-        },
-      },
-      (err) => {
-        if (err) return resolve({ ok: false, error: err.message })
-        broadcast('sftp:progress', { type: 'upload', percent: 100, done: true })
-        resolve({ ok: true, localFile, remoteFile })
-      },
-    )
-  })
-}))

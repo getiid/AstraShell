@@ -3,6 +3,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Server, FolderTree, Cable, KeyRound, Settings, Pencil, Eye, EyeOff } from 'lucide-vue-next'
+import { useHostCrud } from './composables/useHostCrud'
+import { useHostFilters } from './composables/useHostFilters'
+import { useHostProbe } from './composables/useHostProbe'
+import { useSftpActions } from './composables/useSftpActions'
+import { useSftpPanels } from './composables/useSftpPanels'
+import { useSshTabActions } from './composables/useSshTabActions'
+import { useTerminalTabs } from './composables/useTerminalTabs'
 import '@xterm/xterm/css/xterm.css'
 
 type NavKey = 'hosts' | 'sftp' | 'snippets' | 'serial' | 'local' | 'vault' | 'settings' | 'logs'
@@ -28,10 +35,13 @@ type TerminalMode = 'ssh' | 'serial' | 'local'
 const activeTerminalMode = ref<TerminalMode>('ssh')
 
 type LocalSSHConfig = { host: string; port?: number; username: string; password?: string; privateKey?: string }
-type SshTab = { id: string; name: string; connected: boolean }
-const sshTabs = ref<SshTab[]>([])
-const SSH_BUFFER_MAX_CHARS = 240000
-const sshBufferBySession = new Map<string, string>()
+const {
+  sshTabs,
+  sshBufferBySession,
+  ensureSshBuffer,
+  getSshBuffer,
+  appendSshBuffer,
+} = useTerminalTabs()
 
 const hostName = ref('')
 const hostCategory = ref(DEFAULT_CATEGORY)
@@ -40,16 +50,8 @@ const selectedHostId = ref('')
 const editingHost = ref<any | null>(null)
 const editPasswordVisible = ref(false)
 const hostEditorVisible = ref(false)
-const selectedCategory = ref(ALL_CATEGORY)
-const hostKeyword = ref('')
-const newCategoryName = ref('')
-const newCategoryInputVisible = ref(false)
 
 const extraCategories = ref<string[]>([])
-type HostProbeState = 'unknown' | 'checking' | 'online' | 'offline'
-const hostProbeById = ref<Record<string, { state: HostProbeState; detail?: string }>>({})
-let hostProbeBatchId = 0
-let hostProbeRunning = false
 
 const notify = (ok: boolean, message: string) => {
   if (ok) {
@@ -61,188 +63,48 @@ const notify = (ok: boolean, message: string) => {
   }
 }
 
-const formatQuickConnectValue = (host: { host?: string; username?: string; port?: number }) => {
-  const username = String(host?.username || 'root').trim() || 'root'
-  const address = String(host?.host || '').trim()
-  const port = Number(host?.port || 22)
-  if (!address) return ''
-  return port && port !== 22 ? `${username}@${address}:${port}` : `${username}@${address}`
-}
 
-type QuickConnectParseResult =
-  | { ok: true; username: string; host: string; port: number }
-  | { ok: false; error: string }
 
-const parseQuickConnectInput = (rawValue: string): QuickConnectParseResult => {
-  const raw = String(rawValue || '').trim().replace(/^ssh\s+/i, '')
-  if (!raw) return { ok: false, error: '请输入 SSH 地址，例如 root@1.2.3.4' }
-  if (/\s/.test(raw)) return { ok: false, error: '快速连接仅支持 user@host 或 user@host:port' }
+const {
+  sftpPath,
+  sftpRows,
+  sftpStatus,
+  sftpHostId,
+  sftpConnected,
+  rightConnectPanelOpen,
+  rightConnectTarget,
+  sftpDragLocalPath,
+  sftpDragRemoteFile,
+  sftpUploadProgress,
+  sftpDownloadProgress,
+  selectedRemoteFile,
+  sftpNewDirName,
+  sftpRenameTo,
+  remoteMenu,
+  leftPanelMode,
+  leftConnectPanelOpen,
+  leftConnectTarget,
+  leftConnectCategory,
+  leftConnectKeyword,
+  leftSftpHostId,
+  leftSftpPath,
+  leftSftpRows,
+  rightPanelMode,
+  rightConnectCategory,
+  rightConnectKeyword,
+  rightLocalPath,
+  rightLocalRows,
+  leftFileKeyword,
+  rightFileKeyword,
+  localSortBy,
+  remoteSortBy,
+} = useSftpPanels()
 
-  let username = 'root'
-  let hostPart = raw
-  const atIndex = raw.lastIndexOf('@')
-  if (atIndex >= 0) {
-    username = raw.slice(0, atIndex).trim() || 'root'
-    hostPart = raw.slice(atIndex + 1).trim()
-  }
-  if (!hostPart) return { ok: false, error: '缺少主机地址' }
-
-  let host = hostPart
-  let port = 22
-  const colonIndex = hostPart.lastIndexOf(':')
-  if (colonIndex > 0 && hostPart.indexOf(':') === colonIndex) {
-    const maybePort = Number(hostPart.slice(colonIndex + 1))
-    if (!Number.isFinite(maybePort) || maybePort <= 0) return { ok: false, error: '端口格式无效' }
-    host = hostPart.slice(0, colonIndex).trim()
-    port = maybePort
-  }
-  if (!host) return { ok: false, error: '缺少主机地址' }
-  return { ok: true, username, host, port }
-}
-
-const syncQuickConnectForm = () => {
-  const parsed = parseQuickConnectInput(quickConnectInput.value)
-  if (!parsed.ok) {
-    sshStatus.value = parsed.error
-    return false
-  }
-  const selectedHost = hostItems.value.find((item) => item.id === selectedHostId.value)
-  const selectedTarget = selectedHost ? formatQuickConnectValue(selectedHost) : ''
-  sshForm.value.host = parsed.host
-  sshForm.value.port = parsed.port
-  sshForm.value.username = parsed.username
-  if (selectedHost && quickConnectInput.value.trim() === selectedTarget) {
-    hostName.value = selectedHost.name || `${parsed.username}@${parsed.host}`
-    hostCategory.value = selectedHost.category || DEFAULT_CATEGORY
-    authType.value = selectedHost.auth_type === 'key' ? 'key' : 'password'
-    selectedKeyRef.value = selectedHost.private_key_ref || ''
-  } else {
-    selectedHostId.value = ''
-    hostName.value = `${parsed.username}@${parsed.host}`
-    hostCategory.value = DEFAULT_CATEGORY
-    authType.value = 'password'
-    selectedKeyRef.value = ''
-  }
-  return true
-}
-
-const createEmptyHostEditor = () => ({
-  id: '',
-  name: '',
-  host: '',
-  port: 22,
-  username: 'root',
-  password: '',
-  category: DEFAULT_CATEGORY,
-  authType: 'password',
-  privateKeyRef: '',
-  purchaseDate: '',
-  expiryDate: '',
-})
-
-const hostCategories = computed(() => {
-  const set = new Set<string>([DEFAULT_CATEGORY])
-  hostItems.value.forEach((h) => set.add(h.category || DEFAULT_CATEGORY))
-  extraCategories.value.forEach((c) => set.add(c))
-  return Array.from(set)
-})
-
-const displayCategories = computed(() => [ALL_CATEGORY, ...hostCategories.value])
-
-const addCategory = () => {
-  const name = newCategoryName.value.trim()
-  if (!name) {
-    newCategoryInputVisible.value = false
-    return
-  }
-  if (!extraCategories.value.includes(name) && !hostCategories.value.includes(name)) {
-    extraCategories.value.push(name)
-  }
-  selectedCategory.value = name
-  newCategoryName.value = ''
-  newCategoryInputVisible.value = false
-  notify(true, `分类已新建：${name}`)
-}
-
-const beginAddCategory = () => {
-  newCategoryInputVisible.value = true
-  newCategoryName.value = ''
-}
-
-const renameCategoryInline = async (from: string) => {
-  if (from === DEFAULT_CATEGORY || from === ALL_CATEGORY) return
-  const to = window.prompt('重命名分类', from)?.trim()
-  if (!to || to === from) return
-
-  extraCategories.value = extraCategories.value.map((c) => (c === from ? to : c))
-
-  const targets = hostItems.value.filter((h) => (h.category || DEFAULT_CATEGORY) === from)
-  for (const h of targets) {
-    await window.lightterm.hostsSave({
-      id: h.id,
-      name: h.name,
-      host: h.host,
-      port: h.port,
-      username: h.username,
-      password: h.password || '',
-      category: to,
-      authType: h.auth_type || 'password',
-      privateKeyRef: h.private_key_ref || null,
-    })
-  }
-  selectedCategory.value = to
-  await refreshHosts()
-  notify(true, `分类已重命名：${from} → ${to}`)
-}
-
-const filteredHosts = computed(() => {
-  const keyword = hostKeyword.value.trim().toLowerCase()
-  return hostItems.value.filter((h) => {
-    const categoryName = h.category || DEFAULT_CATEGORY
-    const inCategory = selectedCategory.value === ALL_CATEGORY || categoryName === selectedCategory.value
-    if (!inCategory) return false
-    if (!keyword) return true
-    return [h.name, h.host, h.username, h.category].some((v) => String(v || '').toLowerCase().includes(keyword))
-  })
-})
-
-const sftpPath = ref('.')
-const sftpRows = ref<any[]>([])
-const sftpStatus = ref('')
-const sftpHostId = ref('')
-const sftpConnected = ref(false)
-const rightConnectPanelOpen = ref(false)
-const rightConnectTarget = ref<string>('')
-const sftpDragLocalPath = ref('')
-const sftpDragRemoteFile = ref('')
-const sftpUploadProgress = ref(0)
-const sftpDownloadProgress = ref(0)
-const selectedRemoteFile = ref('')
-const sftpNewDirName = ref('')
-const sftpRenameTo = ref('')
-const remoteMenu = ref({ visible: false, x: 0, y: 0, filename: '' })
 const textMenu = ref({ visible: false, x: 0, y: 0, mode: 'terminal' as 'terminal' | 'editor' })
 const editorMenuTarget = ref<HTMLInputElement | HTMLTextAreaElement | null>(null)
 const localPath = ref('')
 const localRows = ref<any[]>([])
 const selectedLocalFile = ref('')
-const leftPanelMode = ref<'local' | 'remote'>('local')
-const leftConnectPanelOpen = ref(false)
-const leftConnectTarget = ref<string>('local')
-const leftConnectCategory = ref(ALL_CATEGORY)
-const leftConnectKeyword = ref('')
-const leftSftpHostId = ref('')
-const leftSftpPath = ref('.')
-const leftSftpRows = ref<any[]>([])
-const rightPanelMode = ref<'remote' | 'local'>('remote')
-const rightConnectCategory = ref(ALL_CATEGORY)
-const rightConnectKeyword = ref('')
-const rightLocalPath = ref('')
-const rightLocalRows = ref<any[]>([])
-const leftFileKeyword = ref('')
-const rightFileKeyword = ref('')
-const localSortBy = ref<'name' | 'createdAt' | 'modifiedAt'>('name')
-const remoteSortBy = ref<'name' | 'createdAt' | 'modifiedAt'>('name')
 
 const toTimeMs = (value: unknown) => {
   const num = Number(value || 0)
@@ -580,6 +442,24 @@ const localQuickCommands = [
   { label: '进程快照', cmd: 'ps aux | head -n 20' },
 ]
 
+const saveSessionRestoreState = (payload: any) => {
+  try { localStorage.setItem('astrashell.session.restore.v1', JSON.stringify(payload || {})) } catch {}
+}
+
+const clearSessionRestoreState = () => {
+  try { localStorage.removeItem('astrashell.session.restore.v1') } catch {}
+}
+
+const restoreSessionRestoreState = () => {
+  try {
+    const raw = localStorage.getItem('astrashell.session.restore.v1')
+    if (!raw) return null
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
 type AuditLogItem = {
   id: string
   ts: number
@@ -595,6 +475,9 @@ const auditStatus = ref('')
 const auditKeyword = ref('')
 const auditSource = ref('all')
 const selectedAuditTarget = ref('')
+const favoriteCommands = ref<Array<{ id: string; target: string; command: string; createdAt: number }>>([])
+const commandPaletteInput = ref('')
+const sessionRestoreTried = ref(false)
 
 const resolveAuditTarget = (item: AuditLogItem) => {
   const rawTarget = String(item?.target || '').trim() || '未命名目标'
@@ -624,6 +507,80 @@ const currentAuditLogs = computed(() => {
   if (!target) return []
   return auditLogs.value.filter((item) => resolveAuditTarget(item) === target)
 })
+
+const commandHistoryByTarget = computed(() => {
+  const grouped = new Map<string, Array<{ command: string; ts: number }>>()
+  for (const item of auditLogs.value) {
+    if (item.action !== 'command') continue
+    const target = resolveAuditTarget(item)
+    const command = String(item.content || '').trim()
+    if (!command) continue
+    const list = grouped.get(target) || []
+    if (!list.find((row) => row.command === command)) list.push({ command, ts: Number(item.ts || 0) })
+    grouped.set(target, list)
+  }
+  for (const [key, list] of grouped.entries()) {
+    grouped.set(key, list.sort((a, b) => b.ts - a.ts).slice(0, 80))
+  }
+  return grouped
+})
+
+const activeCommandTarget = computed(() => {
+  if (selectedAuditTarget.value) return selectedAuditTarget.value
+  const current = sshTabs.value.find((t) => t.id === sshSessionId.value)
+  return current?.name || '全局'
+})
+
+const currentCommandHistory = computed(() => {
+  const rows = commandHistoryByTarget.value.get(activeCommandTarget.value) || []
+  const keyword = commandPaletteInput.value.trim().toLowerCase()
+  if (!keyword) return rows
+  return rows.filter((row) => row.command.toLowerCase().includes(keyword))
+})
+
+const currentFavoriteCommands = computed(() => {
+  return favoriteCommands.value.filter((item) => item.target === activeCommandTarget.value || item.target === '全局')
+})
+
+const saveFavoriteCommands = () => {
+  try { localStorage.setItem('astrashell.favoriteCommands.v1', JSON.stringify(favoriteCommands.value)) } catch {}
+}
+
+const restoreFavoriteCommands = () => {
+  try {
+    const raw = localStorage.getItem('astrashell.favoriteCommands.v1')
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) favoriteCommands.value = parsed
+  } catch {}
+}
+
+const runCommandNow = async (command: string) => {
+  const cmd = String(command || '').trim()
+  if (!cmd) return
+  if (activeTerminalMode.value === 'ssh' || activeTerminalMode.value === 'local') {
+    await writeActiveTerminalInput(`${cmd}\n`)
+    focusTerminal.value = true
+    return
+  }
+  sshStatus.value = '请先连接 SSH 或本地终端后执行命令'
+}
+
+const addFavoriteCommand = (command: string) => {
+  const cmd = String(command || '').trim()
+  if (!cmd) return
+  const target = activeCommandTarget.value || '全局'
+  const exists = favoriteCommands.value.find((item) => item.target === target && item.command === cmd)
+  if (exists) return
+  favoriteCommands.value.unshift({ id: `fav-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, target, command: cmd, createdAt: Date.now() })
+  favoriteCommands.value = favoriteCommands.value.slice(0, 200)
+  saveFavoriteCommands()
+}
+
+const removeFavoriteCommand = (id: string) => {
+  favoriteCommands.value = favoriteCommands.value.filter((item) => item.id !== id)
+  saveFavoriteCommands()
+}
 
 const serialTimerActive = computed(() => !!serialTimer)
 const serialConnectionInfo = computed(() => {
@@ -774,33 +731,6 @@ const terminalTargetLabel = computed(() => {
   return localStatus.value || '未连接'
 })
 
-const saveSshTabs = () => {
-  try {
-    const snapshot = sshTabs.value.map((tab) => ({ id: tab.id, name: tab.name }))
-    localStorage.setItem('lightterm.sshTabs', JSON.stringify(snapshot))
-  } catch {}
-}
-
-const ensureSshBuffer = (sessionId: string) => {
-  if (!sessionId) return
-  if (sshBufferBySession.has(sessionId)) return
-  sshBufferBySession.set(sessionId, '')
-}
-
-const getSshBuffer = (sessionId: string) => sshBufferBySession.get(sessionId) || ''
-
-const appendSshBuffer = (sessionId: string, text: string) => {
-  ensureSshBuffer(sessionId)
-  if (!text) return
-  const prev = sshBufferBySession.get(sessionId) || ''
-  if (prev.length + text.length <= SSH_BUFFER_MAX_CHARS) {
-    sshBufferBySession.set(sessionId, prev + text)
-    return
-  }
-  const merged = (prev + text).slice(-SSH_BUFFER_MAX_CHARS)
-  sshBufferBySession.set(sessionId, merged)
-}
-
 const renderActiveSshBuffer = () => {
   if (!terminal) return
   const text = getSshBuffer(sshSessionId.value)
@@ -809,65 +739,25 @@ const renderActiveSshBuffer = () => {
   terminal.focus()
 }
 
-const buildSessionId = () => `ssh-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-
-const switchSshTab = (sessionId: string) => {
-  const tab = sshTabs.value.find((item) => item.id === sessionId)
-  if (!tab) return
-  activeTerminalMode.value = 'ssh'
-  sshSessionId.value = tab.id
-  sshConnected.value = !!tab.connected
-  ensureSshBuffer(tab.id)
-  renderActiveSshBuffer()
-}
-
-const createSshTab = (name = '新会话') => {
-  const id = buildSessionId()
-  sshTabs.value = [...sshTabs.value, { id, name, connected: false }]
-  ensureSshBuffer(id)
-  sshSessionId.value = id
-  sshConnected.value = false
-  saveSshTabs()
-  renderActiveSshBuffer()
-  return id
-}
-
-const ensureActiveSshSession = (name = '新会话') => {
-  if (sshSessionId.value && sshTabs.value.some((tab) => tab.id === sshSessionId.value)) return sshSessionId.value
-  return createSshTab(name)
-}
-
-const closeSshTab = async (sessionId: string) => {
-  const tabs = sshTabs.value
-  const targetIndex = tabs.findIndex((item) => item.id === sessionId)
-  if (targetIndex === -1) return
-
-  await window.lightterm.sshDisconnect({ sessionId })
-  clearSessionDecoders(sessionId)
-
-  const nextTabs = tabs.filter((item) => item.id !== sessionId)
-  sshBufferBySession.delete(sessionId)
-
-  if (nextTabs.length === 0) {
-    sshTabs.value = []
-    sshBufferBySession.clear()
-    sshSessionId.value = ''
-    sshConnected.value = false
-    focusTerminal.value = false
-    nav.value = 'hosts'
-    saveSshTabs()
-    return
-  }
-
-  sshTabs.value = nextTabs
-  const fallbackIndex = Math.max(0, targetIndex - 1)
-  const nextActive = nextTabs[fallbackIndex] || nextTabs[0]
-  if (!nextActive) return
-  sshSessionId.value = nextActive.id
-  sshConnected.value = !!nextActive.connected
-  saveSshTabs()
-  renderActiveSshBuffer()
-}
+const {
+  saveSshTabs,
+  switchSshTab,
+  createSshTab,
+  ensureActiveSshSession,
+  closeSshTab,
+  restoreSshTabs,
+} = useSshTabActions({
+  sshTabs,
+  sshSessionId,
+  sshConnected,
+  activeTerminalMode,
+  focusTerminal,
+  nav,
+  sshBufferBySession,
+  ensureSshBuffer,
+  renderActiveSshBuffer,
+  clearSessionDecoders,
+})
 
 const decodePlainPayload = (msg: { data?: string; dataBase64?: string }) => {
   const rawText = String(msg?.data || '')
@@ -982,6 +872,7 @@ const initTerminal = () => {
     if (tab) tab.connected = false
     saveSshTabs()
     clearSessionDecoders(msg.sessionId)
+    if (!sshTabs.value.some((t) => t.connected)) clearSessionRestoreState()
     if (msg.sessionId === sshSessionId.value) {
       sshConnected.value = false
       if (activeTerminalMode.value === 'ssh') terminal?.writeln('\r\n[SSH 已断开]')
@@ -1021,34 +912,6 @@ const initTerminal = () => {
     localStatus.value = `本地终端错误：${msg?.error || '未知错误'}`
     if (activeTerminalMode.value === 'local') terminal?.writeln(`\r\n[本地终端错误] ${msg?.error || '未知错误'}`)
   })
-}
-
-const restoreSshTabs = () => {
-  try {
-    const raw = localStorage.getItem('lightterm.sshTabs')
-    if (!raw) {
-      sshTabs.value = []
-      sshSessionId.value = ''
-      sshConnected.value = false
-      sshBufferBySession.clear()
-      return
-    }
-    const parsed = JSON.parse(raw) as Array<{ id: string; name: string }>
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      sshTabs.value = []
-      sshSessionId.value = ''
-      sshConnected.value = false
-      sshBufferBySession.clear()
-      return
-    }
-    sshTabs.value = parsed.map((p) => ({ ...p, connected: false }))
-    const first = sshTabs.value[0]
-    sshSessionId.value = first?.id || ''
-    sshConnected.value = false
-    sshBufferBySession.clear()
-    sshTabs.value.forEach((t) => sshBufferBySession.set(t.id, ''))
-    ensureSshBuffer(sshSessionId.value)
-  } catch {}
 }
 
 const buildDefaultDockerSnippet = (): SnippetItem => ({
@@ -1607,6 +1470,16 @@ const connectSSH = async (optionsOrEvent?: { keepNav?: boolean } | Event) => {
     activeTerminalMode.value = 'ssh'
     terminal?.writeln('\r\n[SSH 已连接，可直接输入命令]')
     focusTerminal.value = true
+    saveSessionRestoreState({
+      type: 'ssh',
+      host: sshForm.value.host,
+      port: sshForm.value.port,
+      username: sshForm.value.username,
+      authType: authType.value,
+      keyRef: selectedKeyRef.value || '',
+      hostName: hostName.value || sessionLabel,
+      targetTabId: sessionId,
+    })
     if (!keepNav) nav.value = 'hosts'
   }
   return !!res.ok
@@ -1621,127 +1494,6 @@ const connectSSHFromHosts = async () => {
   await connectSSH()
 }
 
-const cancelHostProbe = () => {
-  hostProbeBatchId += 1
-  hostProbeRunning = false
-}
-
-const setHostProbeState = (hostId: string, state: HostProbeState, detail = '') => {
-  const prev = hostProbeById.value[hostId]
-  const nextDetail = detail || ''
-  if (prev?.state === state && (prev?.detail || '') === nextDetail) return
-  hostProbeById.value[hostId] = { state, detail: nextDetail }
-}
-
-const hostProbeClass = (hostId: string) => hostProbeById.value[hostId]?.state || 'unknown'
-
-const hostProbeTitle = (h: any) => {
-  const probe = hostProbeById.value[h.id]
-  const statusText = probe?.state === 'online'
-    ? 'SSH 可连接'
-    : probe?.state === 'offline'
-      ? 'SSH 不可连接'
-      : probe?.state === 'checking'
-        ? 'SSH 检测中...'
-        : '等待检测'
-  return probe?.detail ? `${statusText}：${probe.detail}` : statusText
-}
-
-const syncHostProbeMap = () => {
-  const probeMap = hostProbeById.value
-  const activeHostIds = new Set<string>()
-
-  hostItems.value.forEach((h) => {
-    const id = String(h?.id || '')
-    if (!id) return
-    activeHostIds.add(id)
-    if (!probeMap[id]) probeMap[id] = { state: 'unknown' }
-  })
-
-  Object.keys(probeMap).forEach((id) => {
-    if (!activeHostIds.has(id)) delete probeMap[id]
-  })
-}
-
-const buildHostProbeConfig = async (h: any): Promise<{ ok: boolean; cfg?: LocalSSHConfig; error?: string }> => {
-  if ((h.auth_type || 'password') !== 'key') {
-    return {
-      ok: true,
-      cfg: {
-        host: h.host,
-        port: Number(h.port || 22),
-        username: h.username,
-        password: h.password || undefined,
-      },
-    }
-  }
-
-  if (!h.private_key_ref) {
-    return { ok: false, error: '未配置密钥引用' }
-  }
-  const keyRes = await window.lightterm.vaultKeyGet({ id: h.private_key_ref })
-  if (!keyRes.ok) {
-    return { ok: false, error: keyRes.error || '读取密钥失败' }
-  }
-  const privateKey = keyRes.item?.privateKey || ''
-  if (!privateKey) {
-    return { ok: false, error: '密钥内容为空' }
-  }
-  return {
-    ok: true,
-    cfg: {
-      host: h.host,
-      port: Number(h.port || 22),
-      username: h.username,
-      privateKey,
-    },
-  }
-}
-
-const testHostReachability = async (h: any, batchId = hostProbeBatchId) => {
-  if (!h?.id || batchId !== hostProbeBatchId) return
-  setHostProbeState(h.id, 'checking')
-  const built = await buildHostProbeConfig(h)
-  if (batchId !== hostProbeBatchId) return
-  if (!built.ok || !built.cfg) {
-    setHostProbeState(h.id, 'offline', built.error || '配置不完整')
-    return
-  }
-  const res = await window.lightterm.sshTest(built.cfg)
-  if (batchId !== hostProbeBatchId) return
-  if (res.ok) {
-    setHostProbeState(h.id, 'online')
-  } else {
-    setHostProbeState(h.id, 'offline', res.error || '连接失败')
-  }
-}
-
-const runHostProbeBatch = async (targets: any[]) => {
-  if (hostProbeRunning) return
-  if (!targets.length) return
-  syncHostProbeMap()
-  const batchId = ++hostProbeBatchId
-  hostProbeRunning = true
-  const queue = [...targets]
-  const workerCount = Math.min(3, queue.length)
-  try {
-    await Promise.all(Array.from({ length: workerCount }, async () => {
-      while (queue.length > 0) {
-        if (batchId !== hostProbeBatchId) return
-        const host = queue.shift()
-        if (!host) break
-        await testHostReachability(host, batchId)
-      }
-    }))
-  } finally {
-    hostProbeRunning = false
-  }
-}
-
-const probeAllHosts = async () => runHostProbeBatch(hostItems.value)
-
-const probeFilteredHosts = async () => runHostProbeBatch(filteredHosts.value)
-
 const refreshHosts = async (options: { probe?: boolean } = {}) => {
   const res = await window.lightterm.hostsList()
   if (res.ok) {
@@ -1754,98 +1506,73 @@ const refreshHosts = async (options: { probe?: boolean } = {}) => {
     if (options.probe) await probeAllHosts()
   }
 }
-const saveCurrentHost = async () => {
-  if (!syncQuickConnectForm()) return
-  const res = await window.lightterm.hostsSave({
-    name: hostName.value || sshForm.value.host,
-    category: hostCategory.value || DEFAULT_CATEGORY,
-    ...sshForm.value,
-    authType: authType.value,
-    privateKeyRef: selectedKeyRef.value || null,
-  })
-  if (res.ok) {
-    await refreshHosts()
-    notify(true, '主机已保存')
-  } else {
-    notify(false, `主机保存失败：${res.error || '未知错误'}`)
-  }
-}
-const useHost = (h: any) => {
-  selectedHostId.value = h.id
-  sshForm.value.host = h.host
-  sshForm.value.port = h.port
-  sshForm.value.username = h.username
-  sshForm.value.password = h.password || ''
-  quickConnectInput.value = formatQuickConnectValue(h)
-  hostName.value = h.name
-  hostCategory.value = h.category || DEFAULT_CATEGORY
-  authType.value = h.auth_type === 'key' ? 'key' : 'password'
-  selectedKeyRef.value = h.private_key_ref || ''
-}
-const openHostEditor = (h: any) => {
-  useHost(h)
-  editPasswordVisible.value = false
-  editingHost.value = {
-    id: h.id,
-    name: h.name,
-    host: h.host,
-    port: h.port,
-    username: h.username,
-    password: h.password || '',
-    category: h.category || DEFAULT_CATEGORY,
-    authType: h.auth_type || 'password',
-    privateKeyRef: h.private_key_ref || '',
-    purchaseDate: h.purchaseDate || '',
-    expiryDate: h.expiryDate || '',
-  }
-  hostEditorVisible.value = true
-}
 
-const openCreateHostEditor = () => {
-  selectedHostId.value = ''
-  hostEditorVisible.value = true
-  editPasswordVisible.value = false
-  editingHost.value = createEmptyHostEditor()
-}
+const {
+  selectedCategory,
+  hostKeyword,
+  newCategoryName,
+  newCategoryInputVisible,
+  hostCategories,
+  displayCategories,
+  filteredHosts,
+  beginAddCategory,
+  addCategory,
+  renameCategoryInline,
+} = useHostFilters({
+  hostItems,
+  extraCategories,
+  defaultCategory: DEFAULT_CATEGORY,
+  allCategory: ALL_CATEGORY,
+  notify,
+  refreshHosts: async () => refreshHosts(),
+})
 
-const openHostTerminal = async (h: any) => {
-  useHost(h)
+const {
+  hostProbeRunning,
+  cancelHostProbe,
+  hostProbeClass,
+  hostProbeTitle,
+  syncHostProbeMap,
+  testHostReachability,
+  probeAllHosts,
+  probeFilteredHosts,
+} = useHostProbe({
+  hostItems,
+  filteredHosts,
+})
+
+const connectHostTerminal = async (h: any) => {
   const tabId = createSshTab((h?.name || h?.host || '新会话').trim())
   const ok = await connectSSH()
   if (!ok) await closeSshTab(tabId)
 }
-const saveEditedHost = async () => {
-  if (!editingHost.value) return
-  const h = editingHost.value
-  const res = await window.lightterm.hostsSave({
-    id: h.id || undefined,
-    name: h.name,
-    host: h.host,
-    port: Number(h.port || 22),
-    username: h.username,
-    password: h.password || '',
-    category: h.category || DEFAULT_CATEGORY,
-    authType: h.authType || 'password',
-    privateKeyRef: h.privateKeyRef || null,
-    purchaseDate: h.purchaseDate || '',
-    expiryDate: h.expiryDate || '',
-  })
-  if (res.ok) {
-    await refreshHosts()
-    notify(true, '主机参数已更新')
-  } else {
-    notify(false, `更新失败：${res.error || '未知错误'}`)
-  }
-}
-const deleteCurrentHost = async () => {
-  if (!selectedHostId.value) return
-  await window.lightterm.hostsDelete({ id: selectedHostId.value })
-  selectedHostId.value = ''
-  editingHost.value = null
-  hostEditorVisible.value = false
-  await refreshHosts()
-  sshStatus.value = '主机已删除'
-}
+
+const {
+  syncQuickConnectForm,
+  saveCurrentHost,
+  useHost,
+  openHostEditor,
+  openCreateHostEditor,
+  openHostTerminal,
+  saveEditedHost,
+  deleteCurrentHost,
+} = useHostCrud({
+  sshForm,
+  quickConnectInput,
+  selectedHostId,
+  hostItems,
+  hostName,
+  hostCategory,
+  authType,
+  selectedKeyRef,
+  sshStatus,
+  editingHost,
+  editPasswordVisible,
+  hostEditorVisible,
+  notify,
+  refreshHosts: async () => refreshHosts(),
+  connectHostTerminal,
+})
 
 const loadLocalFs = async () => {
   const res = await window.lightterm.localfsList({ localPath: localPath.value || undefined })
@@ -1911,6 +1638,28 @@ const getSftpConfigByHostId = async (hostId: string) => {
 }
 
 const getSftpConfig = async () => getSftpConfigByHostId(sftpHostId.value)
+
+const {
+  loadSftp,
+  uploadSftp,
+  downloadSftp,
+  mkdirSftp,
+  renameSftp,
+  deleteSftp,
+} = useSftpActions({
+  sftpPath,
+  sftpRows,
+  sftpStatus,
+  rightPanelMode,
+  selectedLocalFile,
+  sftpUploadProgress,
+  selectedRemoteFile,
+  sftpDownloadProgress,
+  sftpNewDirName,
+  sftpRenameTo,
+  loadRightLocalFs,
+  getSftpConfig,
+})
 
 const loadLeftSftp = async () => {
   if (!leftSftpHostId.value) {
@@ -1991,33 +1740,6 @@ const connectSftp = async () => {
   await loadSftp()
 }
 
-const loadSftp = async () => {
-  if (rightPanelMode.value === 'local') {
-    await loadRightLocalFs()
-    return
-  }
-  const { config, error } = await getSftpConfig()
-  if (!config) {
-    sftpStatus.value = error || '请先选择并连接 SSH 服务器'
-    return
-  }
-  sftpStatus.value = '读取中...'
-  const res = await window.lightterm.sftpList({ ...config, remotePath: sftpPath.value })
-  if (!res.ok) return (sftpStatus.value = `读取失败：${res.error}`)
-  sftpRows.value = res.items || []
-  sftpStatus.value = `已读取 ${sftpRows.value.length} 项`
-}
-const uploadSftp = async () => {
-  const { config, error } = await getSftpConfig()
-  if (!config) {
-    sftpStatus.value = error || '请先选择并连接 SSH 服务器'
-    return
-  }
-  sftpUploadProgress.value = 0
-  const res = await window.lightterm.sftpUpload({ ...config, remoteDir: sftpPath.value, localFile: selectedLocalFile.value || undefined })
-  sftpStatus.value = res.ok ? `上传成功：${res.remoteFile}` : `上传失败：${res.error}`
-  if (res.ok) await loadSftp()
-}
 const openLocalItem = async (item: any) => {
   if (!item?.isDir) {
     selectedLocalFile.value = item.path
@@ -2134,7 +1856,7 @@ const onLocalDrop = async () => {
     return
   }
   const remoteFile = `${sftpPath.value.replace(/\/$/, '')}/${sftpDragRemoteFile.value}`
-  const res = await window.lightterm.sftpDownloadToLocal({ ...config, remoteFile, localDir: localPath.value || '', filename: sftpDragRemoteFile.value })
+  const res = await window.lightterm.sftpDownloadToLocal({ ...config, remoteFile, localDir: localPath.value || '', filename: sftpDragRemoteFile.value, conflictPolicy: 'resume', resume: true })
   sftpStatus.value = res.ok ? `拖拽下载成功：${res.filePath}` : `拖拽下载失败：${res.error}`
   sftpDragRemoteFile.value = ''
   if (res.ok) await loadLocalFs()
@@ -2290,69 +2012,6 @@ const remoteGoUp = async () => {
   sftpPath.value = parts.length ? `/${parts.slice(0, -1).join('/')}` || '/' : '/'
   await loadSftp()
 }
-const downloadSftp = async () => {
-  const { config, error } = await getSftpConfig()
-  if (!config) {
-    sftpStatus.value = error || '请先选择并连接 SSH 服务器'
-    return
-  }
-  if (!selectedRemoteFile.value) {
-    sftpStatus.value = '请先在列表中选择远程文件'
-    return
-  }
-  sftpDownloadProgress.value = 0
-  const remoteFile = `${sftpPath.value.replace(/\/$/, '')}/${selectedRemoteFile.value}`
-  const res = await window.lightterm.sftpDownload({ ...config, remoteFile })
-  sftpStatus.value = res.ok ? `下载成功：${res.filePath}` : `下载失败：${res.error}`
-}
-const mkdirSftp = async () => {
-  const { config, error } = await getSftpConfig()
-  if (!config) {
-    sftpStatus.value = error || '请先选择并连接 SSH 服务器'
-    return
-  }
-  if (!sftpNewDirName.value) return
-  const remoteDir = `${sftpPath.value.replace(/\/$/, '')}/${sftpNewDirName.value}`
-  const res = await window.lightterm.sftpMkdir({ ...config, remoteDir })
-  sftpStatus.value = res.ok ? `目录已创建：${remoteDir}` : `创建失败：${res.error}`
-  if (res.ok) {
-    sftpNewDirName.value = ''
-    await loadSftp()
-  }
-}
-const renameSftp = async () => {
-  const { config, error } = await getSftpConfig()
-  if (!config) {
-    sftpStatus.value = error || '请先选择并连接 SSH 服务器'
-    return
-  }
-  if (!selectedRemoteFile.value || !sftpRenameTo.value) return
-  const oldPath = `${sftpPath.value.replace(/\/$/, '')}/${selectedRemoteFile.value}`
-  const newPath = `${sftpPath.value.replace(/\/$/, '')}/${sftpRenameTo.value}`
-  const res = await window.lightterm.sftpRename({ ...config, oldPath, newPath })
-  sftpStatus.value = res.ok ? `已重命名为：${sftpRenameTo.value}` : `重命名失败：${res.error}`
-  if (res.ok) {
-    selectedRemoteFile.value = sftpRenameTo.value
-    sftpRenameTo.value = ''
-    await loadSftp()
-  }
-}
-const deleteSftp = async () => {
-  const { config, error } = await getSftpConfig()
-  if (!config) {
-    sftpStatus.value = error || '请先选择并连接 SSH 服务器'
-    return
-  }
-  if (!selectedRemoteFile.value) return
-  const remoteFile = `${sftpPath.value.replace(/\/$/, '')}/${selectedRemoteFile.value}`
-  const res = await window.lightterm.sftpDelete({ ...config, remoteFile })
-  sftpStatus.value = res.ok ? `已删除：${selectedRemoteFile.value}` : `删除失败：${res.error}`
-  if (res.ok) {
-    selectedRemoteFile.value = ''
-    await loadSftp()
-  }
-}
-
 const plainVaultMessage = (msg: string) => String(msg || '').replace(/^[✅❌]\s*/, '').trim()
 const dbFolderFromPath = (dbPath: string) => String(dbPath || '').replace(/[\\/](lightterm\.db|astrashell\.data\.json)$/i, '')
 const isStorageFilePath = (value: string) => /\.(json|db)$/i.test(String(value || '').trim())
@@ -2942,6 +2601,7 @@ const connectLocalTerminal = async () => {
   localConnected.value = true
   activeTerminalMode.value = 'local'
   focusTerminal.value = true
+  saveSessionRestoreState({ type: 'local', cwd: res.cwd || localCwd.value || '' })
   localStatus.value = `${res.shell || 'shell'} @ ${res.cwd || localCwd.value || '~'}`
   localCwd.value = res.cwd || localCwd.value
   await nextTick()
@@ -2959,6 +2619,7 @@ const disconnectLocalTerminal = async () => {
   localConnected.value = false
   localStatus.value = '已断开'
   localSessionId.value = ''
+  clearSessionRestoreState()
   if (activeTerminalMode.value === 'local') focusTerminal.value = false
 }
 
@@ -2969,6 +2630,28 @@ const runLocalQuickCommand = async (cmd: string) => {
   }
   const res = await window.lightterm.localWrite({ sessionId: localSessionId.value, data: `${cmd}\n` })
   if (!res.ok) localStatus.value = `发送失败：${res.error || '未知错误'}`
+}
+
+const restoreLastSessionIfNeeded = async () => {
+  const state = restoreSessionRestoreState()
+  if (!state || typeof state !== 'object') return
+  if (state.type === 'local') {
+    if (!localConnected.value) {
+      if (state.cwd) localCwd.value = String(state.cwd)
+      await connectLocalTerminal()
+    }
+    return
+  }
+  if (state.type === 'ssh') {
+    if (!state.host || !state.username) return
+    sshForm.value.host = String(state.host)
+    sshForm.value.port = Number(state.port || 22)
+    sshForm.value.username = String(state.username)
+    hostName.value = String(state.hostName || `${state.username}@${state.host}`)
+    authType.value = state.authType === 'key' ? 'key' : 'password'
+    selectedKeyRef.value = String(state.keyRef || '')
+    await connectSSH({ keepNav: true })
+  }
 }
 
 const refreshAuditLogs = async () => {
@@ -3074,7 +2757,13 @@ watch(nav, async (value) => {
 })
 
 watch(startupGateVisible, (visible) => {
-  if (!visible) void runPostUnlockStartupTasks()
+  if (!visible) {
+    void runPostUnlockStartupTasks()
+    if (!sessionRestoreTried.value) {
+      sessionRestoreTried.value = true
+      void restoreLastSessionIfNeeded()
+    }
+  }
 })
 
 onMounted(async () => {
@@ -3090,8 +2779,13 @@ onMounted(async () => {
   }
 
   restoreSshTabs()
+  restoreFavoriteCommands()
   loadTerminalEncoding()
-  if (!startupGateVisible.value) await runPostUnlockStartupTasks()
+  if (!startupGateVisible.value) {
+    await runPostUnlockStartupTasks()
+    sessionRestoreTried.value = true
+    await restoreLastSessionIfNeeded()
+  }
 
   window.addEventListener('resize', () => {
     fitAddon?.fit()
@@ -3899,6 +3593,35 @@ onBeforeUnmount(() => {
           <input v-model="auditKeyword" placeholder="搜索目标 / 命令 / 错误信息" />
           <button class="muted" @click="refreshAuditLogs">按条件过滤</button>
           <span class="hosts-stat">{{ auditStatus || '未加载' }}</span>
+        </div>
+        <div class="grid" style="grid-template-columns: 1fr 1fr; margin-top: 6px;">
+          <div>
+            <div class="hosts-header-sub">命令历史（目标：{{ activeCommandTarget }}）</div>
+            <input v-model="commandPaletteInput" placeholder="筛选命令历史" />
+            <div class="logs-list" style="max-height: 180px; margin-top: 6px;">
+              <article v-for="row in currentCommandHistory.slice(0, 20)" :key="`hist-${row.ts}-${row.command}`" class="log-item">
+                <pre>{{ row.command }}</pre>
+                <div class="serial-head-actions">
+                  <button class="ghost tiny" @click="runCommandNow(row.command)">执行</button>
+                  <button class="muted tiny" @click="addFavoriteCommand(row.command)">收藏</button>
+                </div>
+              </article>
+            </div>
+          </div>
+          <div>
+            <div class="hosts-header-sub">收藏命令</div>
+            <div class="logs-list" style="max-height: 210px; margin-top: 6px;">
+              <article v-for="fav in currentFavoriteCommands" :key="fav.id" class="log-item">
+                <div class="log-target">{{ fav.target }}</div>
+                <pre>{{ fav.command }}</pre>
+                <div class="serial-head-actions">
+                  <button class="ghost tiny" @click="runCommandNow(fav.command)">执行</button>
+                  <button class="danger tiny" @click="removeFavoriteCommand(fav.id)">取消收藏</button>
+                </div>
+              </article>
+              <div v-if="currentFavoriteCommands.length === 0" class="file-row empty">暂无收藏命令</div>
+            </div>
+          </div>
         </div>
         <div class="logs-split">
           <aside class="logs-target-list">
