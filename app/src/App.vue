@@ -2836,7 +2836,7 @@ onBeforeUnmount(() => {
   <div class="layout" :class="{ 'terminal-layout': focusTerminal }">
     <aside class="sidebar">
       <div class="brand">
-        <img src="/logo-astrashell-app.png?v=11" alt="AstraShell" class="brand-logo brand-logo-wide" />
+        <img src="/logo-astrashell.png?v=12" alt="AstraShell Banner" class="brand-logo brand-logo-wide" />
       </div>
       <ul class="sidebar-nav">
         <li :class="{ active: nav === 'hosts' }" @click="focusTerminal = false; nav = 'hosts'"><Server :size="16" /> 主机管理</li>

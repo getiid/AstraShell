@@ -1,8 +1,8 @@
 # AstraShell
 
-![AstraShell Banner](docs/screenshots/astrashell-banner.png)
+<img src="docs/screenshots/astrashell-banner.png" alt="AstraShell Banner" width="420" />
 
-![AstraShell Icon](docs/screenshots/astrashell-icon-1024.png)
+<img src="docs/screenshots/astrashell-icon-1024.png" alt="AstraShell Icon" width="120" />
 
 AstraShell 是一个开源、免费、跨平台（macOS / Windows / Android）的终端工作台，聚合 SSH、SFTP、密钥仓库、代码片段、串口与版本更新能力，目标是让“连接服务器到执行运维动作”变成单一工作流。
 
