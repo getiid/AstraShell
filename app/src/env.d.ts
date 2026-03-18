@@ -12,6 +12,9 @@ declare global {
       appPickStorageFile: () => Promise<{ ok: boolean; filePath?: string; error?: string }>
       appPickStorageSaveFile: () => Promise<{ ok: boolean; filePath?: string; error?: string }>
       appSetStorageFolder: (payload: { folder: string }) => Promise<{ ok: boolean; dbPath?: string; restartRequired?: boolean; error?: string }>
+      appCreateBackup: () => Promise<{ ok: boolean; backupPath?: string; auditBackupPath?: string; count?: number; error?: string }>
+      appListBackups: () => Promise<{ ok: boolean; items?: Array<{ name: string; path: string; size: number; mtimeMs: number }>; error?: string }>
+      appRestoreBackup: (payload: { backupPath: string }) => Promise<{ ok: boolean; dbPath?: string; restartRequired?: boolean; error?: string }>
       appRestart: () => Promise<{ ok: boolean; error?: string }>
       appOpenExternal: (payload: { url: string }) => Promise<{ ok: boolean; error?: string }>
       clipboardRead: () => Promise<{ ok: boolean; text?: string; error?: string }>

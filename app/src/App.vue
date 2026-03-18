@@ -397,6 +397,8 @@ const storageDbPath = ref('')
 const storagePathInput = ref('')
 const storageMsg = ref('')
 const storageMetaText = ref('')
+const backupItems = ref<Array<{ name: string; path: string; size: number; mtimeMs: number }>>([])
+const selectedBackupPath = ref('')
 const startupGateVisible = ref(true)
 const startupGateMode = ref<'loading' | 'select' | 'init' | 'unlock'>('loading')
 const startupGateBusy = ref(false)
@@ -2580,6 +2582,43 @@ const applyStoragePath = async () => {
   await refreshStorageOverview()
 }
 
+const refreshBackupList = async () => {
+  const res = await window.lightterm.appListBackups()
+  if (!res.ok) {
+    storageMsg.value = `读取备份列表失败：${res.error || '未知错误'}`
+    return
+  }
+  backupItems.value = res.items || []
+  if (!backupItems.value.some((item) => item.path === selectedBackupPath.value)) {
+    selectedBackupPath.value = backupItems.value[0]?.path || ''
+  }
+}
+
+const createDataBackup = async () => {
+  const res = await window.lightterm.appCreateBackup()
+  storageMsg.value = res.ok
+    ? `备份已创建：${res.backupPath}`
+    : `备份失败：${res.error || '未知错误'}`
+  if (res.ok) await refreshBackupList()
+}
+
+const restoreDataBackup = async () => {
+  if (!selectedBackupPath.value) {
+    storageMsg.value = '请先选择备份文件'
+    return
+  }
+  const ok = window.confirm('恢复备份会覆盖当前共享数据文件，确定继续吗？')
+  if (!ok) return
+  const res = await window.lightterm.appRestoreBackup({ backupPath: selectedBackupPath.value })
+  storageMsg.value = res.ok
+    ? '备份已恢复并重新加载数据'
+    : `恢复失败：${res.error || '未知错误'}`
+  if (res.ok) {
+    await refreshStorageDataNow()
+    await refreshBackupList()
+  }
+}
+
 const loadSerialPorts = async () => {
   serialPorts.value = await window.lightterm.listSerialPorts()
   serialPortsLoaded.value = true
@@ -2919,6 +2958,7 @@ onMounted(async () => {
   restoreLocalQuickItems()
   resetLocalQuickDraft()
   loadTerminalEncoding()
+  void refreshBackupList()
   if (!startupGateVisible.value) {
     await runPostUnlockStartupTasks()
     sessionRestoreTried.value = true
@@ -3772,8 +3812,29 @@ onBeforeUnmount(() => {
         </div>
         <p>{{ storageMsg }}</p>
         <p class="hint">{{ storageMetaText || '正在读取数据文件状态...' }}</p>
+        <div class="storage-backup-card">
+          <div class="hosts-left-title">
+            <span>数据备份</span>
+            <span class="hosts-stat">防止异常导致数据丢失</span>
+          </div>
+          <div class="storage-path-actions">
+            <button class="muted tiny" @click="createDataBackup">立即备份</button>
+            <button class="muted tiny" @click="refreshBackupList">刷新备份列表</button>
+          </div>
+          <div class="storage-path-row">
+            <select v-model="selectedBackupPath">
+              <option value="">请选择备份文件</option>
+              <option v-for="item in backupItems" :key="item.path" :value="item.path">
+                {{ new Date(item.mtimeMs).toLocaleString() }} ｜ {{ item.name }}
+              </option>
+            </select>
+            <div class="storage-path-actions">
+              <button class="danger tiny" @click="restoreDataBackup">恢复备份</button>
+            </div>
+          </div>
+        </div>
         <p class="hint">建议直接选择同一个 `astrashell.data.json` 文件；也可填目录（会自动拼接默认文件名）。把文件放到 iCloud/OneDrive/共享盘/U 盘即可跨设备读取同一份数据。</p>
-        <p class="hint">不再使用“手动同步队列”：所有改动都直接写入数据文件。</p>
+        <p class="hint">共享文件只保存：主机 / 片段 / 密钥 / 快捷工具。日志为本地数据，不参与多端同步。</p>
       </section>
 
       <section v-else-if="!focusTerminal && nav === 'logs'" class="panel logs-panel">
@@ -4278,6 +4339,7 @@ button.vault-mini-card.active { border-color:#3b82f6; box-shadow: inset 0 0 0 1p
 .storage-path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .storage-path-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap; white-space: nowrap; }
 .storage-path-actions .tiny { min-width: 64px; padding: 6px 8px; }
+.storage-backup-card { margin-top: 8px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc; padding: 10px; display: grid; gap: 8px; }
 .status-bar { height: 28px; border: 1px solid #d1d5db; border-radius: 8px; background: #f8fafc; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 12px; color: #374151; z-index: 50; }
 .fixed-bottom { position: fixed; left: 232px; right: 12px; bottom: 8px; }
 .layout.terminal-layout { grid-template-columns: 1fr; }

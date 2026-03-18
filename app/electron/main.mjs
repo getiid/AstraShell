@@ -49,6 +49,32 @@ let dbWatchTimer = null
 const DATA_FILE_NAME = 'astrashell.data.json'
 const LEGACY_DB_FILE_NAME = 'lightterm.db'
 const MAX_AUDIT_LOGS = 5000
+
+const localAuditLogPath = () => path.join(app.getPath('userData'), 'audit.local.json')
+let localAuditLogs = []
+
+function loadLocalAuditLogs() {
+  try {
+    const p = localAuditLogPath()
+    if (!fs.existsSync(p)) {
+      localAuditLogs = []
+      return
+    }
+    const raw = fs.readFileSync(p, 'utf8')
+    const parsed = JSON.parse(raw)
+    localAuditLogs = Array.isArray(parsed) ? parsed.slice(0, MAX_AUDIT_LOGS) : []
+  } catch {
+    localAuditLogs = []
+  }
+}
+
+function saveLocalAuditLogs() {
+  try {
+    const p = localAuditLogPath()
+    fs.mkdirSync(path.dirname(p), { recursive: true })
+    fs.writeFileSync(p, JSON.stringify(localAuditLogs.slice(0, MAX_AUDIT_LOGS), null, 2), 'utf8')
+  } catch {}
+}
 const macManualInstallTip = '当前构建未使用 Developer ID 签名，无法一键安装更新。请从 GitHub Release 下载 DMG 手动覆盖安装。'
 const githubReleaseProvider = {
   provider: 'github',
@@ -99,16 +125,8 @@ function isLikelyPromptLine(text) {
   return false
 }
 
-function ensureLogsArray(currentDb) {
-  if (!currentDb?.data) return []
-  if (!Array.isArray(currentDb.data.logs)) currentDb.data.logs = []
-  return currentDb.data.logs
-}
-
 function appendAuditLog(payload = {}) {
   try {
-    const currentDb = requireDbReady({ allowCreate: true })
-    const logs = ensureLogsArray(currentDb)
     const now = Date.now()
     const row = {
       id: String(payload.id || uuidv4()),
@@ -119,9 +137,9 @@ function appendAuditLog(payload = {}) {
       content: String(payload.content || ''),
       level: String(payload.level || 'info'),
     }
-    logs.unshift(row)
-    if (logs.length > MAX_AUDIT_LOGS) logs.splice(MAX_AUDIT_LOGS)
-    currentDb.save()
+    localAuditLogs.unshift(row)
+    if (localAuditLogs.length > MAX_AUDIT_LOGS) localAuditLogs = localAuditLogs.slice(0, MAX_AUDIT_LOGS)
+    saveLocalAuditLogs()
     broadcast('audit:appended', row)
     return row
   } catch (e) {
@@ -130,12 +148,12 @@ function appendAuditLog(payload = {}) {
   }
 }
 
-function listAuditLogsFromDb(currentDb, payload = {}) {
+function listAuditLogsFromDb(_currentDb, payload = {}) {
   const limitRaw = Number(payload?.limit || 300)
   const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 300, 1), MAX_AUDIT_LOGS)
   const source = String(payload?.source || '').trim()
   const keyword = String(payload?.keyword || '').trim().toLowerCase()
-  let rows = [...ensureLogsArray(currentDb)].map((row) => {
+  let rows = [...localAuditLogs].map((row) => {
     const next = { ...row }
     const content = String(next?.content || '')
     const action = String(next?.action || '')
@@ -568,7 +586,6 @@ class JsonDB {
         }
         : { extra_categories: [], updated_at: 0 }
       this.data.vault_keys = Array.isArray(parsed?.vault_keys) ? parsed.vault_keys : []
-      this.data.logs = Array.isArray(parsed?.logs) ? parsed.logs : []
       return true
     } catch {
       return false
@@ -590,7 +607,6 @@ class JsonDB {
         this.data.snippets = []
         this.data.snippet_meta = { extra_categories: [], updated_at: 0 }
         this.data.vault_keys = []
-        this.data.logs = []
         this.applyDecryptedPayload()
       } else {
         this.encryptedPayload = null
@@ -635,7 +651,6 @@ class JsonDB {
             : { extra_categories: [], updated_at: 0 },
           vault_meta: diskParsed.vault_meta || null,
           vault_keys: Array.isArray(diskParsed.vault_keys) ? diskParsed.vault_keys : [],
-          logs: Array.isArray(diskParsed.logs) ? diskParsed.logs : [],
           storage_version: Number(diskParsed.storage_version || 2),
         }
 
@@ -651,7 +666,6 @@ class JsonDB {
                 : { extra_categories: [], updated_at: 0 },
               vault_meta: diskParsed.vault_meta || null,
               vault_keys: Array.isArray(decrypted.vault_keys) ? decrypted.vault_keys : [],
-              logs: Array.isArray(decrypted.logs) ? decrypted.logs : [],
               storage_version: Number(diskParsed.storage_version || 2),
             }
           } catch {}
@@ -675,14 +689,12 @@ class JsonDB {
           ? this.data.snippet_meta
           : { extra_categories: [], updated_at: 0 },
         vault_keys: Array.isArray(this.data.vault_keys) ? this.data.vault_keys : [],
-        logs: Array.isArray(this.data.logs) ? this.data.logs : [],
       }), this.encryptionKey)
       this.encryptedPayload = encryptedPayload
       persist.hosts = []
       persist.snippets = []
       persist.snippet_meta = { extra_categories: [], updated_at: 0 }
       persist.vault_keys = []
-      persist.logs = []
       persist.encrypted_payload = encryptedPayload
     } else {
       this.encryptedPayload = null
@@ -822,7 +834,7 @@ function mergeDbData(baseData, incomingData) {
     snippet_meta: mergeSnippetMeta(baseData?.snippet_meta, incomingData?.snippet_meta),
     vault_meta: mergeVaultMeta(baseData?.vault_meta, incomingData?.vault_meta),
     vault_keys: mergeRowsById(baseData?.vault_keys, incomingData?.vault_keys, getVaultKeyUpdatedAt),
-    logs: mergeAuditLogs(baseData?.logs, incomingData?.logs),
+    logs: [],
   }
 }
 
@@ -1077,7 +1089,7 @@ function getStorageMeta() {
     hosts: Array.isArray(currentDb?.data?.hosts) ? currentDb.data.hosts.length : 0,
     snippets: Array.isArray(currentDb?.data?.snippets) ? currentDb.data.snippets.length : 0,
     vaultKeys: Array.isArray(currentDb?.data?.vault_keys) ? currentDb.data.vault_keys.length : 0,
-    logs: Array.isArray(currentDb?.data?.logs) ? currentDb.data.logs.length : 0,
+    logs: Array.isArray(localAuditLogs) ? localAuditLogs.length : 0,
   }
 }
 
@@ -1687,6 +1699,7 @@ function createWindow() {
 app.whenReady().then(() => {
   try {
     buildAppMenu()
+    loadLocalAuditLogs()
     initDb()
     logMain('initDb ok')
     startDbWatchTimer()
@@ -1799,6 +1812,75 @@ ipcMain.handle('app:set-storage-folder', async (_event, payload) => {
   return { ok: true, dbPath: nextDbPath, restartRequired: true }
 })
 
+ipcMain.handle('app:create-backup', async () => {
+  try {
+    const dbPath = resolveDbPath() || activeDbPath
+    if (!dbPath || !fs.existsSync(dbPath)) return { ok: false, error: '共享数据文件不存在，无法备份' }
+    const backupDir = path.join(app.getPath('userData'), 'backups')
+    fs.mkdirSync(backupDir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
+    const sharedBackup = path.join(backupDir, `astrashell.data.${stamp}.bak.json`)
+    fs.copyFileSync(dbPath, sharedBackup)
+
+    const localAudit = localAuditLogPath()
+    let localAuditBackup = ''
+    if (fs.existsSync(localAudit)) {
+      localAuditBackup = path.join(backupDir, `audit.local.${stamp}.bak.json`)
+      fs.copyFileSync(localAudit, localAuditBackup)
+    }
+
+    const backups = fs.readdirSync(backupDir)
+      .filter((n) => /\.bak\.json$/i.test(n))
+      .map((name) => ({ name, path: path.join(backupDir, name), mtimeMs: Number(fs.statSync(path.join(backupDir, name)).mtimeMs || 0) }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+
+    return { ok: true, backupPath: sharedBackup, auditBackupPath: localAuditBackup, count: backups.length }
+  } catch (e) {
+    return { ok: false, error: e?.message || '创建备份失败' }
+  }
+})
+
+ipcMain.handle('app:list-backups', async () => {
+  try {
+    const backupDir = path.join(app.getPath('userData'), 'backups')
+    if (!fs.existsSync(backupDir)) return { ok: true, items: [] }
+    const items = fs.readdirSync(backupDir)
+      .filter((n) => /\.bak\.json$/i.test(n))
+      .map((name) => {
+        const full = path.join(backupDir, name)
+        const st = fs.statSync(full)
+        return { name, path: full, size: Number(st.size || 0), mtimeMs: Number(st.mtimeMs || 0) }
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    return { ok: true, items }
+  } catch (e) {
+    return { ok: false, error: e?.message || '读取备份列表失败' }
+  }
+})
+
+ipcMain.handle('app:restore-backup', async (_event, payload) => {
+  try {
+    const backupPath = String(payload?.backupPath || '').trim()
+    if (!backupPath || !fs.existsSync(backupPath)) return { ok: false, error: '备份文件不存在' }
+    const dbPath = resolveDbPath() || activeDbPath
+    if (!dbPath) return { ok: false, error: '未配置共享数据文件路径' }
+
+    const dir = path.dirname(dbPath)
+    fs.mkdirSync(dir, { recursive: true })
+    const tmp = path.join(dir, `.${path.basename(dbPath)}.restore.${process.pid}.${Date.now()}.tmp`)
+    fs.copyFileSync(backupPath, tmp)
+    fs.renameSync(tmp, dbPath)
+
+    db = null
+    initDb()
+    refreshDbFromDisk('restore-backup', true)
+    broadcast('storage:data-changed', { changedAt: Date.now(), restored: true })
+    return { ok: true, dbPath, restartRequired: false }
+  } catch (e) {
+    return { ok: false, error: e?.message || '恢复备份失败' }
+  }
+})
+
 ipcMain.handle('app:restart', async () => {
   setImmediate(() => {
     app.relaunch()
@@ -1857,10 +1939,8 @@ ipcMain.handle('audit:append', async (_event, payload) => {
 
 ipcMain.handle('audit:clear', async () => {
   try {
-    refreshDbFromDisk('audit:clear', true)
-    const currentDb = requireDbReady()
-    currentDb.data.logs = []
-    currentDb.save()
+    localAuditLogs = []
+    saveLocalAuditLogs()
     return { ok: true }
   } catch (e) {
     return { ok: false, error: e?.message || '清空日志失败' }
