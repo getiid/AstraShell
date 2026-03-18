@@ -487,27 +487,27 @@ const filteredLocalQuickItems = computed(() => {
   return localQuickItems.value.filter((item) => item.category === localQuickCategory.value)
 })
 
-const saveLocalQuickItems = () => {
-  try { localStorage.setItem('astrashell.localQuickTools.v1', JSON.stringify(localQuickItems.value)) } catch {}
+const saveLocalQuickItems = async () => {
+  const items = localQuickItems.value.map((item) => ({ ...item, updatedAt: Date.now() }))
+  const res = await window.lightterm.quicktoolsSetState({ items })
+  if (res.ok && Array.isArray(res.items)) {
+    localQuickItems.value = res.items as LocalQuickItem[]
+  }
 }
 
-const restoreLocalQuickItems = () => {
-  try {
-    const raw = localStorage.getItem('astrashell.localQuickTools.v1')
-    if (!raw) return
-    const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed)) {
-      const normalized = parsed
-        .map((item: any) => ({
-          id: String(item?.id || `lq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`),
-          category: String(item?.category || '未分类').trim() || '未分类',
-          label: String(item?.label || '').trim(),
-          cmd: String(item?.cmd || '').trim(),
-        }))
-        .filter((item: LocalQuickItem) => item.label && item.cmd)
-      if (normalized.length > 0) localQuickItems.value = normalized
-    }
-  } catch {}
+const restoreLocalQuickItems = async () => {
+  const res = await window.lightterm.quicktoolsGetState()
+  if (!res.ok) return
+  const parsed = Array.isArray(res.items) ? res.items : []
+  const normalized = parsed
+    .map((item: any) => ({
+      id: String(item?.id || `lq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`),
+      category: String(item?.category || '未分类').trim() || '未分类',
+      label: String(item?.label || '').trim(),
+      cmd: String(item?.cmd || '').trim(),
+    }))
+    .filter((item: LocalQuickItem) => item.label && item.cmd)
+  localQuickItems.value = normalized.length > 0 ? normalized : [...defaultLocalQuickItems]
 }
 
 const startEditLocalQuickItem = (item: LocalQuickItem) => {
@@ -558,14 +558,14 @@ const saveLocalQuickDraft = () => {
       cmd,
     })
   }
-  saveLocalQuickItems()
+  void saveLocalQuickItems()
   resetLocalQuickDraft()
   localQuickEditorVisible.value = false
 }
 
 const removeLocalQuickItem = (id: string) => {
   localQuickItems.value = localQuickItems.value.filter((item) => item.id !== id)
-  saveLocalQuickItems()
+  void saveLocalQuickItems()
   if (localQuickEditId.value === id) resetLocalQuickDraft()
 }
 
@@ -2526,7 +2526,9 @@ const refreshStorageInfo = async () => {
       const kb = Math.max(0, Number(meta.size || 0)) / 1024
       const encrypted = meta.encrypted ? '已加密' : '未加密'
       const fileState = meta.exists ? '存在' : '不存在'
-      storageMetaText.value = `当前读取：${meta.dbPath || '-'} ｜ 文件：${fileState} ｜ 大小：${kb.toFixed(1)} KB ｜ 修改时间：${modified} ｜ 数据：主机 ${meta.hosts || 0} / 片段 ${meta.snippets || 0} / 密钥 ${meta.vaultKeys || 0} / 日志 ${meta.logs || 0} ｜ 加密：${encrypted} ｜ 格式：v${meta.storageVersion || 1}`
+      const sig = String(meta.signature || '').split(':').pop() || ''
+      const sigShort = sig ? sig.slice(0, 8) : '-'
+      storageMetaText.value = `当前读取：${meta.dbPath || '-'} ｜ 文件：${fileState} ｜ 大小：${kb.toFixed(1)} KB ｜ 修改时间：${modified} ｜ 数据：主机 ${meta.hosts || 0} / 片段 ${meta.snippets || 0} / 密钥 ${meta.vaultKeys || 0} / 日志 ${meta.logs || 0} ｜ fileId：${meta.fileId || '-'} ｜ rev：${meta.revision ?? 0} ｜ 指纹：${sigShort} ｜ 加密：${encrypted} ｜ 格式：v${meta.storageVersion || 1}`
     }
   } catch (error) {
     startupGateError.value = `读取数据文件路径失败：${formatAppError(error)}`
@@ -2955,7 +2957,7 @@ onMounted(async () => {
   }
 
   restoreSshTabs()
-  restoreLocalQuickItems()
+  await restoreLocalQuickItems()
   resetLocalQuickDraft()
   loadTerminalEncoding()
   void refreshBackupList()

@@ -539,13 +539,18 @@ class JsonDB {
     this.encryptionKey = null
     this.encryptedPayload = null
     this.data = {
+      app: 'AstraShell',
+      schema_version: 1,
+      file_id: uuidv4(),
+      revision: 0,
       storage_version: 2,
       hosts: [],
       snippets: [],
       snippet_meta: { extra_categories: [], updated_at: 0 },
       vault_meta: null,
       vault_keys: [],
-      logs: [],
+      quick_tools: [],
+      notes: '',
     }
     this.load()
   }
@@ -586,6 +591,8 @@ class JsonDB {
         }
         : { extra_categories: [], updated_at: 0 }
       this.data.vault_keys = Array.isArray(parsed?.vault_keys) ? parsed.vault_keys : []
+      this.data.quick_tools = Array.isArray(parsed?.quick_tools) ? parsed.quick_tools : []
+      this.data.notes = String(parsed?.notes || '')
       return true
     } catch {
       return false
@@ -601,12 +608,16 @@ class JsonDB {
       const raw = fs.readFileSync(this.filePath, 'utf8')
       const parsed = JSON.parse(raw)
       this.data = { ...this.data, ...parsed }
+      this.data.file_id = String(this.data.file_id || uuidv4())
+      this.data.revision = Number(this.data.revision || 0)
       if (parsed?.encrypted_payload && typeof parsed.encrypted_payload === 'object') {
         this.encryptedPayload = parsed.encrypted_payload
         this.data.hosts = []
         this.data.snippets = []
         this.data.snippet_meta = { extra_categories: [], updated_at: 0 }
         this.data.vault_keys = []
+        this.data.quick_tools = []
+        this.data.notes = ''
         this.applyDecryptedPayload()
       } else {
         this.encryptedPayload = null
@@ -638,12 +649,25 @@ class JsonDB {
     fs.mkdirSync(dir, { recursive: true })
     const tmpPath = path.join(dir, `.${path.basename(this.filePath)}.${process.pid}.${Date.now()}.tmp`)
 
-    // 防止多端/多实例覆盖：保存前尝试把磁盘上的最新数据与内存数据按 updated_at 合并
+    // 低频共享文件模式：保存前做版本冲突检测，避免旧视图覆盖新数据
+    const diskParsed = readJsonFile(this.filePath)
+    const diskRevision = Number(diskParsed?.revision || 0)
+    const memoryRevision = Number(this.data?.revision || 0)
+    if (diskParsed && diskRevision > memoryRevision) {
+      const err = new Error(`共享文件已被其他设备更新，请先刷新后再保存（disk=${diskRevision}, local=${memoryRevision}）`)
+      err.code = 'DATA_CONFLICT'
+      throw err
+    }
+
+    // 保存前合并（仅低冲突字段）
     let mergedData = { ...this.data }
     try {
-      const diskParsed = readJsonFile(this.filePath)
       if (diskParsed && typeof diskParsed === 'object') {
         let diskData = {
+          app: String(diskParsed.app || 'AstraShell'),
+          schema_version: Number(diskParsed.schema_version || 1),
+          file_id: String(diskParsed.file_id || this.data.file_id || uuidv4()),
+          revision: Number(diskParsed.revision || 0),
           hosts: Array.isArray(diskParsed.hosts) ? diskParsed.hosts : [],
           snippets: Array.isArray(diskParsed.snippets) ? diskParsed.snippets : [],
           snippet_meta: diskParsed.snippet_meta && typeof diskParsed.snippet_meta === 'object'
@@ -651,6 +675,8 @@ class JsonDB {
             : { extra_categories: [], updated_at: 0 },
           vault_meta: diskParsed.vault_meta || null,
           vault_keys: Array.isArray(diskParsed.vault_keys) ? diskParsed.vault_keys : [],
+          quick_tools: Array.isArray(diskParsed.quick_tools) ? diskParsed.quick_tools : [],
+          notes: String(diskParsed.notes || ''),
           storage_version: Number(diskParsed.storage_version || 2),
         }
 
@@ -659,26 +685,33 @@ class JsonDB {
             const decryptedRaw = decryptText(diskParsed.encrypted_payload, this.encryptionKey)
             const decrypted = JSON.parse(decryptedRaw)
             diskData = {
+              ...diskData,
               hosts: Array.isArray(decrypted.hosts) ? decrypted.hosts : [],
               snippets: Array.isArray(decrypted.snippets) ? decrypted.snippets : [],
               snippet_meta: decrypted.snippet_meta && typeof decrypted.snippet_meta === 'object'
                 ? decrypted.snippet_meta
                 : { extra_categories: [], updated_at: 0 },
-              vault_meta: diskParsed.vault_meta || null,
               vault_keys: Array.isArray(decrypted.vault_keys) ? decrypted.vault_keys : [],
-              storage_version: Number(diskParsed.storage_version || 2),
+              quick_tools: Array.isArray(decrypted.quick_tools) ? decrypted.quick_tools : [],
+              notes: String(decrypted.notes || ''),
             }
           } catch {}
         }
 
         mergedData = mergeDbData(diskData, mergedData)
         mergedData.vault_meta = mergeVaultMeta(diskData.vault_meta, mergedData.vault_meta)
+        mergedData.file_id = String(this.data.file_id || diskData.file_id || uuidv4())
       }
     } catch {}
 
     this.data = { ...this.data, ...mergedData }
 
     const persist = { ...this.data }
+    persist.app = 'AstraShell'
+    persist.schema_version = 1
+    persist.file_id = String(this.data.file_id || uuidv4())
+    persist.revision = Number(this.data.revision || 0) + 1
+    this.data.revision = persist.revision
     persist.storage_version = 2
     persist.updated_at = Date.now()
     if (this.shouldEncryptOnSave()) {
@@ -689,12 +722,16 @@ class JsonDB {
           ? this.data.snippet_meta
           : { extra_categories: [], updated_at: 0 },
         vault_keys: Array.isArray(this.data.vault_keys) ? this.data.vault_keys : [],
+        quick_tools: Array.isArray(this.data.quick_tools) ? this.data.quick_tools : [],
+        notes: String(this.data.notes || ''),
       }), this.encryptionKey)
       this.encryptedPayload = encryptedPayload
       persist.hosts = []
       persist.snippets = []
       persist.snippet_meta = { extra_categories: [], updated_at: 0 }
       persist.vault_keys = []
+      persist.quick_tools = []
+      persist.notes = ''
       persist.encrypted_payload = encryptedPayload
     } else {
       this.encryptedPayload = null
@@ -704,6 +741,22 @@ class JsonDB {
       fs.writeFileSync(tmpPath, JSON.stringify(persist, null, 2), 'utf8')
       fs.renameSync(tmpPath, this.filePath)
       this.lastFileSignature = this.getFileSignature()
+
+      // 自动备份：每次成功写入共享数据后留存最近 20 份
+      try {
+        const backupDir = path.join(app.getPath('userData'), 'backups')
+        fs.mkdirSync(backupDir, { recursive: true })
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
+        const backupPath = path.join(backupDir, `autosave.r${persist.revision}.${stamp}.bak.json`)
+        fs.copyFileSync(this.filePath, backupPath)
+        const old = fs.readdirSync(backupDir)
+          .filter((n) => /^autosave\..*\.bak\.json$/i.test(n))
+          .map((name) => ({ name, path: path.join(backupDir, name), mtimeMs: Number(fs.statSync(path.join(backupDir, name)).mtimeMs || 0) }))
+          .sort((a, b) => b.mtimeMs - a.mtimeMs)
+        for (const item of old.slice(20)) {
+          try { fs.unlinkSync(item.path) } catch {}
+        }
+      } catch {}
     } finally {
       try {
         if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath)
@@ -785,6 +838,10 @@ function getAuditUpdatedAt(row) {
   return Number(row?.ts || row?.updatedAt || row?.updated_at || 0)
 }
 
+function getQuickToolUpdatedAt(row) {
+  return Number(row?.updatedAt || row?.updated_at || row?.createdAt || row?.created_at || 0)
+}
+
 function mergeAuditLogs(baseRows, incomingRows) {
   const merged = mergeRowsById(baseRows, incomingRows, getAuditUpdatedAt)
   return merged.sort((a, b) => getAuditUpdatedAt(b) - getAuditUpdatedAt(a)).slice(0, MAX_AUDIT_LOGS)
@@ -828,12 +885,18 @@ function mergeVaultMeta(baseMeta, incomingMeta) {
 
 function mergeDbData(baseData, incomingData) {
   return {
+    app: 'AstraShell',
+    schema_version: 1,
+    file_id: String(incomingData?.file_id || baseData?.file_id || uuidv4()),
+    revision: Math.max(Number(baseData?.revision || 0), Number(incomingData?.revision || 0)),
     storage_version: Math.max(Number(baseData?.storage_version || 1), Number(incomingData?.storage_version || 1), 2),
     hosts: mergeRowsById(baseData?.hosts, incomingData?.hosts, getHostUpdatedAt),
     snippets: mergeRowsById(baseData?.snippets, incomingData?.snippets, getSnippetUpdatedAt),
     snippet_meta: mergeSnippetMeta(baseData?.snippet_meta, incomingData?.snippet_meta),
     vault_meta: mergeVaultMeta(baseData?.vault_meta, incomingData?.vault_meta),
     vault_keys: mergeRowsById(baseData?.vault_keys, incomingData?.vault_keys, getVaultKeyUpdatedAt),
+    quick_tools: mergeRowsById(baseData?.quick_tools, incomingData?.quick_tools, getQuickToolUpdatedAt),
+    notes: String(incomingData?.notes || baseData?.notes || ''),
     logs: [],
   }
 }
@@ -1086,6 +1149,9 @@ function getStorageMeta() {
     mtimeMs,
     encrypted: !!currentDb?.encryptedPayload,
     storageVersion: Number(currentDb?.data?.storage_version || 1),
+    fileId: String(currentDb?.data?.file_id || ''),
+    revision: Number(currentDb?.data?.revision || 0),
+    signature: String(currentDb?.lastFileSignature || ''),
     hosts: Array.isArray(currentDb?.data?.hosts) ? currentDb.data.hosts.length : 0,
     snippets: Array.isArray(currentDb?.data?.snippets) ? currentDb.data.snippets.length : 0,
     vaultKeys: Array.isArray(currentDb?.data?.vault_keys) ? currentDb.data.vault_keys.length : 0,
@@ -2073,6 +2139,40 @@ ipcMain.handle('snippets:set-state', async (_event, payload) => {
     return { ok: true, items: normalized.items, extraCategories: normalized.extraCategories }
   } catch (e) {
     return { ok: false, error: e?.message || '保存代码片段失败', items: [], extraCategories: [] }
+  }
+})
+
+ipcMain.handle('quicktools:get-state', async () => {
+  try {
+    refreshDbFromDisk('quicktools:get-state', true)
+    const currentDb = requireDbReady()
+    const items = Array.isArray(currentDb.data.quick_tools) ? currentDb.data.quick_tools : []
+    return { ok: true, items }
+  } catch (e) {
+    return { ok: false, error: e?.message || '读取快捷工具失败', items: [] }
+  }
+})
+
+ipcMain.handle('quicktools:set-state', async (_event, payload) => {
+  try {
+    refreshDbFromDisk('quicktools:set-state', true)
+    const currentDb = requireDbReady()
+    const items = Array.isArray(payload?.items)
+      ? payload.items
+        .map((row) => ({
+          id: String(row?.id || uuidv4()),
+          category: String(row?.category || '未分类'),
+          label: String(row?.label || '').trim(),
+          cmd: String(row?.cmd || '').trim(),
+          updatedAt: Number(row?.updatedAt || Date.now()),
+        }))
+        .filter((row) => row.label && row.cmd)
+      : []
+    currentDb.data.quick_tools = items
+    currentDb.save()
+    return { ok: true, items }
+  } catch (e) {
+    return { ok: false, error: e?.message || '保存快捷工具失败', items: [] }
   }
 })
 

@@ -6,8 +6,8 @@ declare global {
   interface Window {
     lightterm: {
       appGetStorage: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string }>
-      appGetStorageMeta: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; storageVersion?: number; hosts?: number; snippets?: number; vaultKeys?: number; logs?: number }>
-      appRefreshStorageData: () => Promise<{ ok: boolean; changed?: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; storageVersion?: number; hosts?: number; snippets?: number; vaultKeys?: number; logs?: number; error?: string }>
+      appGetStorageMeta: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; storageVersion?: number; fileId?: string; revision?: number; signature?: string; hosts?: number; snippets?: number; vaultKeys?: number; logs?: number }>
+      appRefreshStorageData: () => Promise<{ ok: boolean; changed?: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; storageVersion?: number; fileId?: string; revision?: number; signature?: string; hosts?: number; snippets?: number; vaultKeys?: number; logs?: number; error?: string }>
       appPickStorageFolder: () => Promise<{ ok: boolean; folder?: string; error?: string }>
       appPickStorageFile: () => Promise<{ ok: boolean; filePath?: string; error?: string }>
       appPickStorageSaveFile: () => Promise<{ ok: boolean; filePath?: string; error?: string }>
@@ -35,6 +35,8 @@ declare global {
       hostsDelete: (payload: { id: string }) => Promise<{ ok: boolean; error?: string }>
       snippetsGetState: () => Promise<{ ok: boolean; items?: any[]; extraCategories?: string[]; error?: string }>
       snippetsSetState: (payload: { items: any[]; extraCategories: string[] }) => Promise<{ ok: boolean; items?: any[]; extraCategories?: string[]; error?: string }>
+      quicktoolsGetState: () => Promise<{ ok: boolean; items?: any[]; error?: string }>
+      quicktoolsSetState: (payload: { items: any[] }) => Promise<{ ok: boolean; items?: any[]; error?: string }>
 
       vaultStatus: () => Promise<{ ok: boolean; configured?: boolean; exists?: boolean; initialized: boolean; unlocked: boolean; error?: string }>
       vaultSetMaster: (payload: { masterPassword: string }) => Promise<{ ok: boolean; error?: string }>
