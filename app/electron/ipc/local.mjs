@@ -146,7 +146,12 @@ export function registerLocalIpc(ipcMain, deps) {
     try {
       session.proc?.resize?.(cols, rows)
       return { ok: true }
-    } catch {
+    } catch (e) {
+      const msg = String(e?.message || '')
+      if (/already exited/i.test(msg) || /已退出/.test(msg)) {
+        try { closeLocalShellSession(sessionId, 'resize-after-exit') } catch {}
+        return { ok: false, error: '终端已退出' }
+      }
       return { ok: false, error: '调整终端尺寸失败' }
     }
   })

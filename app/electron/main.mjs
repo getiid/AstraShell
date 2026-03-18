@@ -57,6 +57,15 @@ const githubReleaseProvider = {
   releaseType: 'release',
 }
 
+process.on('uncaughtException', (error) => {
+  const message = String(error?.message || error || '')
+  if (/Cannot resize a pty that has already exited/i.test(message)) {
+    logMain(`ignored uncaughtException: ${message}`)
+    return
+  }
+  logMain(`uncaughtException: ${message}`)
+})
+
 function stripAnsi(input) {
   return String(input || '')
     // OSC: \x1b] ... \x07 or \x1b\

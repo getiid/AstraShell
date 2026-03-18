@@ -2670,7 +2670,7 @@ const connectLocalTerminal = async () => {
     cols: 120,
     rows: 30,
     shellType: localShellType.value,
-    elevated: isWindowsClient.value ? !!localElevated.value : false,
+    elevated: false,
   })
   if (!res.ok) {
     localStatus.value = `连接失败：${res.error || '未知错误'}`
@@ -3587,8 +3587,8 @@ onBeforeUnmount(() => {
             <option value="cmd">终端类型：CMD</option>
             <option value="powershell">终端类型：PowerShell</option>
           </select>
-          <label v-if="isWindowsClient" class="serial-inline-check">
-            <input v-model="localElevated" type="checkbox" /> 以管理员模式启动（Windows）
+          <label v-if="isWindowsClient" class="serial-inline-check" title="管理员模式正在重构中，当前版本暂不可用">
+            <input v-model="localElevated" type="checkbox" disabled /> 管理员模式（暂不可用，避免弹外部窗口）
           </label>
         </div>
         <div class="local-status">{{ localStatus }}</div>
