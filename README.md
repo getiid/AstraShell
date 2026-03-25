@@ -142,8 +142,8 @@ AstraShell/
 - 仓库：<https://github.com/getiid/AstraShell>
 - 安装包下载：GitHub Releases 附件（`.dmg` / `.exe` / `.apk`）
 - 桌面端自动升级：GitHub Release + `latest.yml` / `latest-mac.yml`
-- 当前仓库打包版本：`v0.3.19`
-- 当前最新公开版本：`v0.3.19`
+- 当前仓库打包版本：`v0.3.10`
+- 当前最新公开版本：`v0.3.10`
 
 ## 自动升级策略
 

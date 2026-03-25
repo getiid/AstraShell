@@ -11,6 +11,7 @@ export function useSshTabActions(params: {
   ensureSshBuffer: (sessionId: string) => void
   renderActiveSshBuffer: () => void
   clearSessionDecoders: (sessionId: string) => void
+  clearSessionRestoreState: () => void
 }) {
   const {
     sshTabs,
@@ -23,6 +24,7 @@ export function useSshTabActions(params: {
     ensureSshBuffer,
     renderActiveSshBuffer,
     clearSessionDecoders,
+    clearSessionRestoreState,
   } = params
 
   const saveSshTabs = () => {
@@ -60,25 +62,35 @@ export function useSshTabActions(params: {
     return createSshTab(name)
   }
 
+  const clearSshTabs = () => {
+    sshTabs.value = []
+    sshSessionId.value = ''
+    sshConnected.value = false
+    sshBufferBySession.clear()
+    try {
+      localStorage.removeItem('lightterm.sshTabs')
+    } catch {}
+  }
+
   const closeSshTab = async (sessionId: string) => {
     const tabs = sshTabs.value
     const targetIndex = tabs.findIndex((item) => item.id === sessionId)
     if (targetIndex === -1) return
+    const targetTab = tabs[targetIndex]
+    const shouldDisconnect = !!targetTab?.connected
 
-    await window.lightterm.sshDisconnect({ sessionId })
     clearSessionDecoders(sessionId)
-
     const nextTabs = tabs.filter((item) => item.id !== sessionId)
     sshBufferBySession.delete(sessionId)
 
     if (nextTabs.length === 0) {
-      sshTabs.value = []
-      sshBufferBySession.clear()
-      sshSessionId.value = ''
-      sshConnected.value = false
+      clearSshTabs()
       focusTerminal.value = false
       nav.value = 'hosts'
-      saveSshTabs()
+      clearSessionRestoreState()
+      if (shouldDisconnect) {
+        void window.lightterm.sshDisconnect({ sessionId }).catch(() => {})
+      }
       return
     }
 
@@ -90,6 +102,10 @@ export function useSshTabActions(params: {
     sshConnected.value = !!nextActive.connected
     saveSshTabs()
     renderActiveSshBuffer()
+    if (!nextTabs.some((item) => item.connected)) clearSessionRestoreState()
+    if (shouldDisconnect) {
+      void window.lightterm.sshDisconnect({ sessionId }).catch(() => {})
+    }
   }
 
   const restoreSshTabs = () => {
@@ -125,6 +141,7 @@ export function useSshTabActions(params: {
     switchSshTab,
     createSshTab,
     ensureActiveSshSession,
+    clearSshTabs,
     closeSshTab,
     restoreSshTabs,
   }

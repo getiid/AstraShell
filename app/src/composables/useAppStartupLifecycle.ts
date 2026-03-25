@@ -49,7 +49,8 @@ type UseAppStartupLifecycleParams = {
   applyStoragePathRaw: (onConfigured?: () => void, onError?: (message: string) => void) => Promise<void>
   restoreDataBackupRaw: (onConfigured?: () => void, onError?: (message: string) => void) => Promise<void>
   formatAppError: (error: unknown) => string
-  restoreSshTabs: () => void
+  clearSessionRestoreState: () => void
+  clearSshTabs: () => void
   restoreLocalQuickItems: () => Promise<void>
   resetLocalQuickDraft: () => void
   loadTerminalEncoding: () => void
@@ -100,7 +101,8 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
     applyStoragePathRaw,
     restoreDataBackupRaw,
     formatAppError,
-    restoreSshTabs,
+    clearSessionRestoreState,
+    clearSshTabs,
     restoreLocalQuickItems,
     resetLocalQuickDraft,
     loadTerminalEncoding,
@@ -241,7 +243,7 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
     void runStartupSyncPull()
     if (sessionRestoreTried.value) return
     sessionRestoreTried.value = true
-    void restoreLastSessionIfNeeded()
+    clearSessionRestoreState()
   }
 
   const bootstrapStartupState = async () => {
@@ -256,7 +258,7 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
       if (startupGateMode.value === 'loading') startupGateMode.value = 'init'
     }
 
-    restoreSshTabs()
+    clearSshTabs()
     await restoreLocalQuickItems()
     resetLocalQuickDraft()
     loadTerminalEncoding()
@@ -266,7 +268,7 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
     await runPostUnlockStartupTasks()
     void runStartupSyncPull()
     sessionRestoreTried.value = true
-    await restoreLastSessionIfNeeded()
+    clearSessionRestoreState()
   }
 
   return {

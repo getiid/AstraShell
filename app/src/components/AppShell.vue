@@ -325,8 +325,8 @@ const {
   switchSshTab,
   createSshTab,
   ensureActiveSshSession,
+  clearSshTabs,
   closeSshTab,
-  restoreSshTabs,
 } = useSshTabActions({
   sshTabs,
   sshSessionId,
@@ -338,6 +338,7 @@ const {
   ensureSshBuffer,
   renderActiveSshBuffer: () => renderActiveSshBuffer(),
   clearSessionDecoders: (sessionId: string) => clearSessionDecoders(sessionId),
+  clearSessionRestoreState,
 })
 
 const {
@@ -962,7 +963,8 @@ const {
   applyStoragePathRaw,
   restoreDataBackupRaw,
   formatAppError,
-  restoreSshTabs,
+  clearSessionRestoreState,
+  clearSshTabs,
   restoreLocalQuickItems,
   resetLocalQuickDraft,
   loadTerminalEncoding,
