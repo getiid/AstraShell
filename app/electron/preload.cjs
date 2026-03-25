@@ -45,10 +45,16 @@ contextBridge.exposeInMainWorld('lightterm', {
   vaultKeyImportFile: () => ipcRenderer.invoke('vault:key-import-file'),
 
   syncLogin: (payload) => ipcRenderer.invoke('sync:login', payload),
+  syncGetConfig: () => ipcRenderer.invoke('sync:get-config'),
+  syncSetConfig: (payload) => ipcRenderer.invoke('sync:set-config', payload),
   syncStatus: () => ipcRenderer.invoke('sync:status'),
+  syncTestConnection: () => ipcRenderer.invoke('sync:test-connection'),
+  syncPullNow: () => ipcRenderer.invoke('sync:pull-now'),
   syncQueue: () => ipcRenderer.invoke('sync:queue'),
   syncClearQueue: () => ipcRenderer.invoke('sync:clear-queue'),
   syncPushNow: () => ipcRenderer.invoke('sync:push-now'),
+  syncRetryFailed: () => ipcRenderer.invoke('sync:retry-failed'),
+  onSyncStatus: (handler) => ipcRenderer.on('sync:status', (_event, data) => handler(data)),
 
   listSerialPorts: () => ipcRenderer.invoke('serial:list'),
   openSerial: (options) => ipcRenderer.invoke('serial:open', options),

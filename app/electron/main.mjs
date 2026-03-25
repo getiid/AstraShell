@@ -6,7 +6,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { v4 as uuidv4 } from 'uuid'
-import { safeParse, setStorageFolderSchema } from './ipc/schemas.mjs'
+import { safeParse, setStorageFolderSchema, syncSetConfigSchema } from './ipc/schemas.mjs'
 import { registerLocalFsIpc } from './ipc/localfs.mjs'
 import { registerLocalIpc } from './ipc/local.mjs'
 import { registerSftpIpc } from './ipc/sftp.mjs'
@@ -16,6 +16,14 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const isDev = !app.isPackaged
+const isFolderSyncSmokeMode = process.env.ASTRASHELL_SMOKE_FOLDER_SYNC === '1'
+const smokeUserDataDir = String(process.env.ASTRASHELL_SMOKE_USER_DATA_DIR || '').trim()
+if (isFolderSyncSmokeMode && smokeUserDataDir) {
+  try {
+    fs.mkdirSync(smokeUserDataDir, { recursive: true })
+    app.setPath('userData', smokeUserDataDir)
+  } catch {}
+}
 try {
   const p = path.join(app.getPath('userData'), 'bootstrap.log')
   fs.appendFileSync(p, `[${new Date().toISOString()}] main loaded isDev=${isDev}\n`, 'utf8')
@@ -49,6 +57,9 @@ let dbWatchTimer = null
 const DATA_FILE_NAME = 'astrashell.data.json'
 const LEGACY_DB_FILE_NAME = 'lightterm.db'
 const MAX_AUDIT_LOGS = 5000
+const SYNC_STATE_FILE_NAME = 'astrashell.sync.json'
+const DEFAULT_SYNC_DEBOUNCE_MS = 1500
+let syncPushTimer = null
 
 const localAuditLogPath = () => path.join(app.getPath('userData'), 'audit.local.json')
 let localAuditLogs = []
@@ -350,6 +361,10 @@ function writeSettings(next) {
   fs.writeFileSync(p, JSON.stringify(next, null, 2), 'utf8')
 }
 
+function getDefaultDbPath() {
+  return path.join(app.getPath('userData'), 'data', DATA_FILE_NAME)
+}
+
 function getUpdateSourceLabel(source) {
   return 'GitHub'
 }
@@ -366,7 +381,7 @@ function resolveDbPath() {
     }
     return normalizeStoragePath(legacy)
   }
-  return ''
+  return getDefaultDbPath()
 }
 
 function isStorageFilePath(inputPath) {
@@ -390,7 +405,7 @@ function getStorageDirFromPath(inputPath) {
 function getStorageSuggestionPath() {
   const configuredPath = resolveDbPath()
   if (configuredPath) return configuredPath
-  return path.join(app.getPath('documents'), DATA_FILE_NAME)
+  return getDefaultDbPath()
 }
 
 function storageFileExists(filePath) {
@@ -410,6 +425,541 @@ function readJsonFile(filePath) {
     return parsed
   } catch {
     return null
+  }
+}
+
+function getFileSignatureByPath(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return ''
+  try {
+    const stat = fs.statSync(filePath)
+    const size = Number(stat?.size || 0)
+    const mtimeMs = Number(stat?.mtimeMs || 0)
+    const raw = fs.readFileSync(filePath, 'utf8')
+    const hash = crypto.createHash('sha1').update(raw).digest('hex')
+    return `${size}:${Math.trunc(mtimeMs)}:${hash}`
+  } catch {
+    return ''
+  }
+}
+
+function getSyncStatePath() {
+  return path.join(app.getPath('userData'), SYNC_STATE_FILE_NAME)
+}
+
+function createDefaultSyncState() {
+  return {
+    deviceId: uuidv4(),
+    running: false,
+    lastDirection: 'idle',
+    lastPushAt: 0,
+    lastPullAt: 0,
+    lastPushedRevision: 0,
+    lastPulledRevision: 0,
+    lastRemoteRevision: 0,
+    lastError: '',
+    lastSuccessMessage: '',
+    remoteMeta: null,
+    queue: [],
+    updatedAt: 0,
+  }
+}
+
+function readSyncState() {
+  try {
+    const p = getSyncStatePath()
+    if (!fs.existsSync(p)) return createDefaultSyncState()
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf8'))
+    return {
+      ...createDefaultSyncState(),
+      ...(parsed && typeof parsed === 'object' ? parsed : {}),
+      queue: Array.isArray(parsed?.queue) ? parsed.queue : [],
+    }
+  } catch {
+    return createDefaultSyncState()
+  }
+}
+
+function writeSyncState(next) {
+  try {
+    const p = getSyncStatePath()
+    fs.mkdirSync(path.dirname(p), { recursive: true })
+    fs.writeFileSync(p, JSON.stringify(next, null, 2), 'utf8')
+  } catch {}
+}
+
+function updateSyncState(mutator) {
+  const state = readSyncState()
+  mutator(state)
+  state.updatedAt = Date.now()
+  writeSyncState(state)
+  return state
+}
+
+function normalizeSyncPathForCompare(inputPath) {
+  return normalizeStoragePath(inputPath).replace(/\\/g, '/').toLowerCase()
+}
+
+function getSyncConfig() {
+  const raw = readSettings()?.sync || {}
+  return {
+    enabled: !!raw.enabled,
+    provider: raw.provider === 'http' ? 'http' : 'folder',
+    targetPath: normalizeStoragePath(String(raw.targetPath || '').trim()),
+    baseUrl: String(raw.baseUrl || '').trim().replace(/\/+$/, ''),
+    token: String(raw.token || '').trim(),
+    autoPullOnStartup: raw.autoPullOnStartup !== false,
+    autoPushOnChange: raw.autoPushOnChange !== false,
+    debounceMs: Math.max(300, Math.min(60000, Number(raw.debounceMs || DEFAULT_SYNC_DEBOUNCE_MS))),
+  }
+}
+
+function getFileSnapshotMeta(filePath) {
+  const normalizedPath = normalizeStoragePath(filePath)
+  if (!normalizedPath) return { path: '', exists: false }
+  const parsed = readJsonFile(normalizedPath)
+  const stat = fs.existsSync(normalizedPath) ? fs.statSync(normalizedPath) : null
+  return {
+    path: normalizedPath,
+    exists: !!stat,
+    size: Number(stat?.size || 0),
+    mtimeMs: Number(stat?.mtimeMs || 0),
+    encrypted: !!parsed?.encrypted_payload,
+    storageVersion: Number(parsed?.storage_version || 1),
+    fileId: String(parsed?.file_id || ''),
+    revision: Number(parsed?.revision || 0),
+    signature: getFileSignatureByPath(normalizedPath),
+  }
+}
+
+function parseSyncRemoteMeta(input, fallback = {}) {
+  const meta = input?.meta && typeof input.meta === 'object' ? input.meta : input
+  return {
+    path: String(meta?.path || fallback.path || ''),
+    exists: meta?.exists !== false,
+    size: Number(meta?.size || fallback.size || 0),
+    mtimeMs: Number(meta?.mtimeMs || meta?.updatedAt || fallback.mtimeMs || 0),
+    encrypted: !!(meta?.encrypted ?? fallback.encrypted),
+    storageVersion: Number(meta?.storageVersion || meta?.storage_version || fallback.storageVersion || 1),
+    fileId: String(meta?.fileId || meta?.file_id || fallback.fileId || ''),
+    revision: Number(meta?.revision || fallback.revision || 0),
+    signature: String(meta?.signature || fallback.signature || ''),
+  }
+}
+
+function withSyncAuthHeaders(config, extraHeaders = {}) {
+  const headers = { ...extraHeaders }
+  if (config.token) headers.Authorization = `Bearer ${config.token}`
+  return headers
+}
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+    const raw = await response.text()
+    const data = raw ? (() => {
+      try { return JSON.parse(raw) } catch { return null }
+    })() : null
+    if (!response.ok) {
+      return { ok: false, status: response.status, error: data?.error || `${response.status} ${response.statusText}` }
+    }
+    if (data && typeof data === 'object') return data
+    return { ok: true }
+  } catch (e) {
+    if (e?.name === 'AbortError') return { ok: false, error: '请求超时' }
+    return { ok: false, error: e?.message || '网络请求失败' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function httpSyncGetMeta(config) {
+  if (!config.baseUrl) return { ok: false, error: '请先配置同步服务地址' }
+  return fetchJsonWithTimeout(`${config.baseUrl}/meta`, {
+    method: 'GET',
+    headers: withSyncAuthHeaders(config, { Accept: 'application/json' }),
+  })
+}
+
+async function httpSyncDownload(config) {
+  if (!config.baseUrl) return { ok: false, error: '请先配置同步服务地址' }
+  return fetchJsonWithTimeout(`${config.baseUrl}/download`, {
+    method: 'GET',
+    headers: withSyncAuthHeaders(config, { Accept: 'application/json' }),
+  }, 20000)
+}
+
+async function httpSyncUpload(config, payload) {
+  if (!config.baseUrl) return { ok: false, error: '请先配置同步服务地址' }
+  return fetchJsonWithTimeout(`${config.baseUrl}/upload`, {
+    method: 'PUT',
+    headers: withSyncAuthHeaders(config, { Accept: 'application/json', 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload),
+  }, 20000)
+}
+
+function getCachedRemoteMeta(config = getSyncConfig(), state = readSyncState()) {
+  if (config.provider === 'folder') return getFileSnapshotMeta(config.targetPath)
+  return state.remoteMeta || null
+}
+
+function broadcastSyncStatus(extra = {}) {
+  const config = getSyncConfig()
+  const state = readSyncState()
+  const payload = {
+    ok: true,
+    config,
+    state,
+    queueCount: state.queue.length,
+    local: getStorageMeta(),
+    remote: getCachedRemoteMeta(config, state),
+    ...extra,
+  }
+  broadcast('sync:status', payload)
+  return payload
+}
+
+function replaceSyncQueue(queue) {
+  updateSyncState((state) => {
+    state.queue = Array.isArray(queue) ? queue : []
+  })
+  broadcastSyncStatus()
+}
+
+function upsertPendingPushTask(reason = 'local-change') {
+  const localMeta = getStorageMeta()
+  const config = getSyncConfig()
+  const targetPath = config.provider === 'http' ? config.baseUrl : config.targetPath
+  updateSyncState((state) => {
+    const now = Date.now()
+    const previous = state.queue.find((item) => item.type === 'push') || null
+    state.queue = [{
+      id: previous?.id || `sync-push-${now.toString(36)}`,
+      type: 'push',
+      reason,
+      createdAt: previous?.createdAt || now,
+      lastAttemptAt: previous?.lastAttemptAt || 0,
+      attempts: previous?.attempts || 0,
+      baseRevision: Number(localMeta?.revision || 0),
+      targetPath,
+      error: previous?.error || '',
+    }]
+  })
+  broadcastSyncStatus()
+}
+
+function markPendingPushAttempt(errorMessage = '') {
+  updateSyncState((state) => {
+    state.queue = (Array.isArray(state.queue) ? state.queue : []).map((item) => item.type === 'push'
+      ? {
+        ...item,
+        lastAttemptAt: Date.now(),
+        attempts: Number(item.attempts || 0) + 1,
+        error: errorMessage,
+      }
+      : item)
+  })
+}
+
+function clearPendingPushTask() {
+  updateSyncState((state) => {
+    state.queue = (Array.isArray(state.queue) ? state.queue : []).filter((item) => item.type !== 'push')
+  })
+  broadcastSyncStatus()
+}
+
+function setSyncSuccess(direction, message, extra = {}) {
+  updateSyncState((state) => {
+    state.running = false
+    state.lastDirection = direction
+    state.lastError = ''
+    state.lastSuccessMessage = message
+    Object.assign(state, extra)
+  })
+  broadcastSyncStatus()
+}
+
+function setSyncError(direction, message, extra = {}) {
+  updateSyncState((state) => {
+    state.running = false
+    state.lastDirection = direction
+    state.lastError = message
+    Object.assign(state, extra)
+  })
+  broadcastSyncStatus()
+}
+
+function setSyncRunning(direction) {
+  updateSyncState((state) => {
+    state.running = true
+    state.lastDirection = direction
+  })
+  broadcastSyncStatus()
+}
+
+function ensureParentDir(filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+}
+
+function copyFileAtomic(sourcePath, targetPath) {
+  ensureParentDir(targetPath)
+  const tmpPath = path.join(
+    path.dirname(targetPath),
+    `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.tmp`,
+  )
+  fs.copyFileSync(sourcePath, tmpPath)
+  fs.renameSync(tmpPath, targetPath)
+}
+
+function scheduleAutoSyncPush(reason = 'local-change') {
+  const config = getSyncConfig()
+  if (!config.enabled || !config.autoPushOnChange) return
+  const validated = validateSyncTargetPath(config)
+  if (!validated.ok) return
+  const localPath = resolveDbPath() || activeDbPath
+  if (!localPath) return
+  upsertPendingPushTask(reason)
+  if (syncPushTimer) clearTimeout(syncPushTimer)
+  syncPushTimer = setTimeout(() => {
+    syncPushTimer = null
+    void performSyncPush({ manual: false, reason: 'auto-push' })
+  }, config.debounceMs)
+}
+
+function cancelAutoSyncPushTimer() {
+  if (!syncPushTimer) return
+  clearTimeout(syncPushTimer)
+  syncPushTimer = null
+}
+
+function validateSyncTargetPath(config = getSyncConfig()) {
+  if (config.provider === 'http') {
+    if (!/^https?:\/\//i.test(String(config.baseUrl || ''))) {
+      return { ok: false, error: '请配置有效的同步服务地址（http/https）' }
+    }
+    return { ok: true, provider: 'http', baseUrl: config.baseUrl }
+  }
+
+  const targetPath = normalizeStoragePath(config.targetPath)
+  if (!targetPath) return { ok: false, error: '请先配置同步目标路径' }
+  const localPath = normalizeStoragePath(resolveDbPath() || activeDbPath)
+  if (localPath && normalizeSyncPathForCompare(localPath) === normalizeSyncPathForCompare(targetPath)) {
+    return { ok: false, error: '同步目标不能与本地数据文件相同' }
+  }
+  return { ok: true, provider: 'folder', targetPath }
+}
+
+async function testSyncConnection() {
+  const config = getSyncConfig()
+  const validated = validateSyncTargetPath(config)
+  if (!validated.ok) return { ok: false, error: validated.error }
+  if (validated.provider === 'http') {
+    const res = await httpSyncGetMeta(config)
+    if (!res?.ok) return { ok: false, error: res?.error || '同步服务不可用' }
+    const remoteMeta = parseSyncRemoteMeta(res, { path: config.baseUrl })
+    updateSyncState((state) => {
+      state.remoteMeta = remoteMeta
+      state.lastRemoteRevision = Number(remoteMeta.revision || 0)
+      state.lastError = ''
+    })
+    broadcastSyncStatus()
+    return { ok: true, provider: config.provider, targetPath: config.baseUrl, remote: remoteMeta }
+  }
+  try {
+    ensureParentDir(validated.targetPath)
+    const remoteMeta = getFileSnapshotMeta(validated.targetPath)
+    updateSyncState((state) => {
+      state.remoteMeta = remoteMeta
+      state.lastRemoteRevision = Number(remoteMeta.revision || 0)
+      state.lastError = ''
+    })
+    broadcastSyncStatus()
+    return {
+      ok: true,
+      provider: config.provider,
+      targetPath: validated.targetPath,
+      remote: remoteMeta,
+    }
+  } catch (e) {
+    return { ok: false, error: e?.message || '无法访问同步目录' }
+  }
+}
+
+function writeTextAtomic(targetPath, content) {
+  ensureParentDir(targetPath)
+  const tmpPath = path.join(
+    path.dirname(targetPath),
+    `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.tmp`,
+  )
+  fs.writeFileSync(tmpPath, String(content || ''), 'utf8')
+  fs.renameSync(tmpPath, targetPath)
+}
+
+async function performSyncPull(options = {}) {
+  const validated = validateSyncTargetPath(getSyncConfig())
+  if (!validated.ok) return { ok: false, error: validated.error }
+  const localPath = resolveDbPath() || activeDbPath
+  if (!localPath) return { ok: false, error: '未配置本地数据文件路径' }
+
+  try {
+    setSyncRunning('pull')
+    let remoteMeta = null
+    let remoteContent = ''
+    if (validated.provider === 'http') {
+      const metaRes = await httpSyncGetMeta(getSyncConfig())
+      if (!metaRes?.ok) {
+        const message = metaRes?.error || '读取远端同步元信息失败'
+        setSyncError('pull', message)
+        return { ok: false, error: message }
+      }
+      remoteMeta = parseSyncRemoteMeta(metaRes, { path: getSyncConfig().baseUrl })
+      if (!remoteMeta.exists) {
+        setSyncSuccess('pull', '同步服务暂无可下载的数据快照', {
+          remoteMeta,
+          lastRemoteRevision: Number(remoteMeta.revision || 0),
+        })
+        return { ok: true, changed: false, pulled: 0, message: '同步服务暂无可下载的数据快照' }
+      }
+    } else {
+      remoteMeta = getFileSnapshotMeta(validated.targetPath)
+    }
+
+    if (!remoteMeta.exists) {
+      setSyncSuccess('pull', '同步目录暂无可下载的数据快照')
+      return { ok: true, changed: false, pulled: 0, message: '同步目录暂无可下载的数据快照' }
+    }
+
+    const localMeta = getFileSnapshotMeta(localPath)
+    if (localMeta.exists && Number(remoteMeta.revision || 0) <= Number(localMeta.revision || 0)) {
+      setSyncSuccess('pull', '远端数据未领先，本地保持不变', {
+        lastPullAt: Date.now(),
+        lastRemoteRevision: Number(remoteMeta.revision || 0),
+      })
+      return { ok: true, changed: false, pulled: 0, message: '远端数据未领先，本地保持不变' }
+    }
+
+    if (validated.provider === 'http') {
+      const downloadRes = await httpSyncDownload(getSyncConfig())
+      if (!downloadRes?.ok) {
+        const message = downloadRes?.error || '下载远端同步快照失败'
+        setSyncError('pull', message, { remoteMeta })
+        return { ok: false, error: message }
+      }
+      remoteContent = typeof downloadRes.content === 'string'
+        ? downloadRes.content
+        : typeof downloadRes.contentBase64 === 'string'
+          ? Buffer.from(downloadRes.contentBase64, 'base64').toString('utf8')
+          : ''
+      if (!remoteContent) {
+        const message = '同步服务返回的下载内容为空'
+        setSyncError('pull', message, { remoteMeta })
+        return { ok: false, error: message }
+      }
+      writeTextAtomic(localPath, remoteContent)
+    } else {
+      copyFileAtomic(validated.targetPath, localPath)
+    }
+    db = null
+    initDb()
+    refreshDbFromDisk('sync:pull-now', true)
+    updateSyncState((state) => {
+      state.lastPullAt = Date.now()
+      state.lastPulledRevision = Number(remoteMeta.revision || 0)
+      state.lastRemoteRevision = Number(remoteMeta.revision || 0)
+      state.remoteMeta = remoteMeta
+    })
+    broadcast('storage:data-changed', { changedAt: Date.now(), pulled: true, source: options.reason || 'sync' })
+    setSyncSuccess('pull', `已下载远端数据 rev.${remoteMeta.revision || 0}`)
+    return { ok: true, changed: true, pulled: 1, message: `已下载远端数据 rev.${remoteMeta.revision || 0}` }
+  } catch (e) {
+    const message = e?.message || '下载同步数据失败'
+    setSyncError('pull', message)
+    return { ok: false, error: message }
+  }
+}
+
+async function performSyncPush(options = {}) {
+  const config = getSyncConfig()
+  const validated = validateSyncTargetPath(config)
+  if (!validated.ok) return { ok: false, error: validated.error }
+  const localPath = resolveDbPath() || activeDbPath
+  if (!localPath || !fs.existsSync(localPath)) return { ok: false, error: '本地数据文件不存在' }
+
+  try {
+    setSyncRunning('push')
+    const localMeta = getFileSnapshotMeta(localPath)
+    let remoteMeta = validated.provider === 'folder' ? getFileSnapshotMeta(validated.targetPath) : null
+    if (validated.provider === 'http') {
+      const metaRes = await httpSyncGetMeta(config)
+      if (metaRes?.ok) remoteMeta = parseSyncRemoteMeta(metaRes, { path: config.baseUrl })
+      else if (metaRes?.error && !/404/.test(String(metaRes.error))) {
+        const message = metaRes.error || '读取远端同步元信息失败'
+        markPendingPushAttempt(message)
+        setSyncError('push', message)
+        return { ok: false, error: message }
+      }
+    }
+
+    if (
+      remoteMeta?.exists
+      && Number(remoteMeta.revision || 0) > Number(localMeta.revision || 0)
+      && remoteMeta.signature !== localMeta.signature
+    ) {
+      const message = `远端已更新到 rev.${remoteMeta.revision || 0}，请先下载后再上传`
+      markPendingPushAttempt(message)
+      setSyncError('push', message, {
+        lastRemoteRevision: Number(remoteMeta.revision || 0),
+      })
+      return { ok: false, conflict: true, error: message }
+    }
+
+    if (validated.provider === 'http') {
+      const content = fs.readFileSync(localPath, 'utf8')
+      const pushRes = await httpSyncUpload(config, {
+        fileId: localMeta.fileId,
+        revision: localMeta.revision,
+        baseRevision: Math.max(
+          Number(readSyncState().lastPushedRevision || 0),
+          Number(readSyncState().lastPulledRevision || 0),
+        ),
+        signature: localMeta.signature,
+        storageVersion: localMeta.storageVersion,
+        content,
+      })
+      if (!pushRes?.ok) {
+        const message = pushRes?.error || '上传同步数据失败'
+        markPendingPushAttempt(message)
+        setSyncError('push', message, { remoteMeta })
+        return { ok: false, error: message }
+      }
+      remoteMeta = parseSyncRemoteMeta(pushRes, {
+        path: config.baseUrl,
+        revision: Number(pushRes?.revision || localMeta.revision || 0),
+        fileId: String(pushRes?.fileId || localMeta.fileId || ''),
+        signature: String(pushRes?.signature || localMeta.signature || ''),
+        storageVersion: Number(pushRes?.storageVersion || localMeta.storageVersion || 1),
+      })
+    } else {
+      copyFileAtomic(localPath, validated.targetPath)
+    }
+    updateSyncState((state) => {
+      state.lastPushAt = Date.now()
+      state.lastPushedRevision = Number(localMeta.revision || 0)
+      state.lastRemoteRevision = Number(localMeta.revision || 0)
+      state.remoteMeta = remoteMeta
+    })
+    clearPendingPushTask()
+    setSyncSuccess('push', `已上传本地数据 rev.${localMeta.revision || 0}`)
+    return { ok: true, pushed: 1, message: `已上传本地数据 rev.${localMeta.revision || 0}` }
+  } catch (e) {
+    const message = e?.message || '上传同步数据失败'
+    markPendingPushAttempt(message)
+    setSyncError('push', message)
+    return { ok: false, error: message }
   }
 }
 
@@ -560,17 +1110,7 @@ class JsonDB {
   }
 
   getFileSignature() {
-    if (!fs.existsSync(this.filePath)) return ''
-    try {
-      const stat = fs.statSync(this.filePath)
-      const size = Number(stat?.size || 0)
-      const mtimeMs = Number(stat?.mtimeMs || 0)
-      const raw = fs.readFileSync(this.filePath, 'utf8')
-      const hash = crypto.createHash('sha1').update(raw).digest('hex')
-      return `${size}:${Math.trunc(mtimeMs)}:${hash}`
-    } catch {
-      return ''
-    }
+    return getFileSignatureByPath(this.filePath)
   }
 
   shouldEncryptOnSave() {
@@ -757,6 +1297,7 @@ class JsonDB {
           try { fs.unlinkSync(item.path) } catch {}
         }
       } catch {}
+      scheduleAutoSyncPush('local-save')
     } finally {
       try {
         if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath)
@@ -1168,6 +1709,233 @@ function logMain(message) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function writeFolderSyncSmokeReport(report) {
+  const reportPath = String(process.env.ASTRASHELL_SMOKE_REPORT_PATH || '').trim()
+  if (!reportPath) return
+  try {
+    ensureParentDir(reportPath)
+    fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8')
+  } catch {}
+}
+
+function removeSmokeFile(filePath) {
+  if (!filePath) return
+  try {
+    if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true })
+  } catch {}
+}
+
+function prepareFolderSyncSmokeMode() {
+  const localPath = normalizeStoragePath(process.env.ASTRASHELL_DATA_PATH || process.env.LIGHTTERM_DB_PATH)
+  const remotePath = normalizeStoragePath(process.env.ASTRASHELL_SMOKE_REMOTE_PATH || '')
+  if (!localPath) throw new Error('folder smoke 缺少本地数据文件路径（ASTRASHELL_DATA_PATH）')
+  if (!remotePath) throw new Error('folder smoke 缺少同步目标路径（ASTRASHELL_SMOKE_REMOTE_PATH）')
+
+  removeSmokeFile(localPath)
+  removeSmokeFile(remotePath)
+  removeSmokeFile(getSettingsPath())
+  removeSmokeFile(getSyncStatePath())
+  removeSmokeFile(localAuditLogPath())
+
+  writeSettings({
+    sync: {
+      enabled: true,
+      provider: 'folder',
+      targetPath: remotePath,
+      baseUrl: '',
+      token: '',
+      autoPullOnStartup: false,
+      autoPushOnChange: true,
+      debounceMs: 400,
+    },
+  })
+}
+
+async function waitForCondition(checker, { timeoutMs = 6000, intervalMs = 120, description = '等待条件完成' } = {}) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      if (await checker()) return
+    } catch {}
+    await wait(intervalMs)
+  }
+  throw new Error(`${description}超时（${timeoutMs}ms）`)
+}
+
+async function runFolderSyncSmokeTest() {
+  const localPath = normalizeStoragePath(resolveDbPath() || activeDbPath)
+  const remotePath = normalizeStoragePath(getSyncConfig().targetPath || process.env.ASTRASHELL_SMOKE_REMOTE_PATH || '')
+  const startedAt = Date.now()
+  const steps = []
+  const finish = (ok, extra = {}) => {
+    const report = {
+      mode: 'folder-sync',
+      ok,
+      startedAt,
+      finishedAt: Date.now(),
+      userDataPath: app.getPath('userData'),
+      localPath,
+      remotePath,
+      steps,
+      ...extra,
+    }
+    writeFolderSyncSmokeReport(report)
+    const output = JSON.stringify({
+      ok: report.ok,
+      localPath: report.localPath,
+      remotePath: report.remotePath,
+      steps: report.steps,
+      error: report.error || '',
+      revisions: report.revisions || {},
+      finalStatus: report.finalStatus || {},
+    })
+    console.log(`[folder-sync-smoke] ${output}`)
+    return report
+  }
+
+  try {
+    if (!localPath) throw new Error('未解析到本地数据文件路径')
+    if (!remotePath) throw new Error('未解析到同步目标路径')
+
+    const currentDb = requireDbReady({ allowCreate: true })
+    const seedItem = {
+      id: `smoke-seed-${Date.now().toString(36)}`,
+      category: 'smoke',
+      label: 'folder-seed',
+      cmd: 'echo seed',
+      updatedAt: Date.now(),
+    }
+    currentDb.data.quick_tools = [seedItem]
+    currentDb.save()
+    const localAfterSeed = readJsonFile(localPath)
+    if (!localAfterSeed) throw new Error('本地初始化写入失败')
+    steps.push({
+      name: 'seed-local',
+      ok: true,
+      revision: Number(localAfterSeed.revision || 0),
+      quickTools: Array.isArray(localAfterSeed.quick_tools) ? localAfterSeed.quick_tools.length : 0,
+    })
+
+    const connectRes = await testSyncConnection()
+    if (!connectRes?.ok) throw new Error(connectRes?.error || 'folder 连接测试失败')
+    steps.push({
+      name: 'test-connection',
+      ok: true,
+      targetPath: connectRes.targetPath,
+      remoteExists: !!connectRes?.remote?.exists,
+    })
+
+    const pushRes = await performSyncPush({ manual: true, reason: 'smoke-manual-push' })
+    if (!pushRes?.ok) throw new Error(pushRes?.error || '首次上传失败')
+    const remoteAfterPush = readJsonFile(remotePath)
+    if (!remoteAfterPush) throw new Error('首次上传后远端文件不存在')
+    if (Number(remoteAfterPush.revision || 0) !== Number(localAfterSeed.revision || 0)) {
+      throw new Error(`首次上传 revision 不一致（local=${localAfterSeed.revision || 0}, remote=${remoteAfterPush.revision || 0}）`)
+    }
+    steps.push({
+      name: 'manual-push',
+      ok: true,
+      revision: Number(remoteAfterPush.revision || 0),
+      quickTools: Array.isArray(remoteAfterPush.quick_tools) ? remoteAfterPush.quick_tools.length : 0,
+    })
+
+    const autoPushItem = {
+      id: `smoke-auto-${Date.now().toString(36)}`,
+      category: 'smoke',
+      label: 'folder-auto',
+      cmd: 'echo auto',
+      updatedAt: Date.now(),
+    }
+    currentDb.data.quick_tools = [...(Array.isArray(currentDb.data.quick_tools) ? currentDb.data.quick_tools : []), autoPushItem]
+    currentDb.save()
+    const localAfterAutoSave = readJsonFile(localPath)
+    if (!localAfterAutoSave) throw new Error('自动上传前本地写入失败')
+    await waitForCondition(() => {
+      const remote = readJsonFile(remotePath)
+      return (
+        Number(remote?.revision || 0) >= Number(localAfterAutoSave.revision || 0)
+        && Array.isArray(remote?.quick_tools)
+        && remote.quick_tools.some((item) => item?.id === autoPushItem.id)
+      )
+    }, { timeoutMs: 8000, description: '等待 folder 自动上传完成' })
+    const remoteAfterAutoPush = readJsonFile(remotePath)
+    steps.push({
+      name: 'auto-push',
+      ok: true,
+      revision: Number(remoteAfterAutoPush?.revision || 0),
+      quickTools: Array.isArray(remoteAfterAutoPush?.quick_tools) ? remoteAfterAutoPush.quick_tools.length : 0,
+    })
+
+    const remotePullItem = {
+      id: `smoke-pull-${Date.now().toString(36)}`,
+      category: 'smoke',
+      label: 'folder-pull',
+      cmd: 'echo pull',
+      updatedAt: Date.now(),
+    }
+    const remoteEdited = {
+      ...remoteAfterAutoPush,
+      revision: Number(remoteAfterAutoPush?.revision || 0) + 3,
+      updated_at: Date.now(),
+      quick_tools: [...(Array.isArray(remoteAfterAutoPush?.quick_tools) ? remoteAfterAutoPush.quick_tools : []), remotePullItem],
+    }
+    writeTextAtomic(remotePath, JSON.stringify(remoteEdited, null, 2))
+    steps.push({
+      name: 'remote-edit',
+      ok: true,
+      revision: Number(remoteEdited.revision || 0),
+      quickTools: Array.isArray(remoteEdited.quick_tools) ? remoteEdited.quick_tools.length : 0,
+    })
+
+    const pullRes = await performSyncPull({ reason: 'smoke-manual-pull' })
+    if (!pullRes?.ok) throw new Error(pullRes?.error || '手动下载失败')
+    const localAfterPull = readJsonFile(localPath)
+    if (!localAfterPull) throw new Error('下载后本地文件不存在')
+    if (Number(localAfterPull.revision || 0) !== Number(remoteEdited.revision || 0)) {
+      throw new Error(`下载后 revision 不一致（local=${localAfterPull.revision || 0}, remote=${remoteEdited.revision || 0}）`)
+    }
+    if (!Array.isArray(localAfterPull.quick_tools) || !localAfterPull.quick_tools.some((item) => item?.id === remotePullItem.id)) {
+      throw new Error('下载后未拿到远端新增 quick tool')
+    }
+    steps.push({
+      name: 'manual-pull',
+      ok: true,
+      revision: Number(localAfterPull.revision || 0),
+      quickTools: Array.isArray(localAfterPull.quick_tools) ? localAfterPull.quick_tools.length : 0,
+    })
+
+    const status = broadcastSyncStatus()
+    return finish(true, {
+      revisions: {
+        localAfterSeed: Number(localAfterSeed.revision || 0),
+        remoteAfterPush: Number(remoteAfterPush.revision || 0),
+        localAfterAutoSave: Number(localAfterAutoSave.revision || 0),
+        remoteAfterAutoPush: Number(remoteAfterAutoPush?.revision || 0),
+        remoteEdited: Number(remoteEdited.revision || 0),
+        localAfterPull: Number(localAfterPull.revision || 0),
+      },
+      finalStatus: {
+        queueCount: Number(status?.queueCount || 0),
+        lastDirection: String(status?.state?.lastDirection || ''),
+        lastError: String(status?.state?.lastError || ''),
+        lastSuccessMessage: String(status?.state?.lastSuccessMessage || ''),
+      },
+    })
+  } catch (e) {
+    steps.push({
+      name: 'failed',
+      ok: false,
+      error: e?.message || 'folder smoke 执行失败',
+    })
+    return finish(false, {
+      error: e?.message || 'folder smoke 执行失败',
+      stack: e?.stack || '',
+    })
+  } finally {
+    cancelAutoSyncPushTimer()
+  }
 }
 
 function buildShellSpawnOptions(cwd) {
@@ -1762,12 +2530,18 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   try {
-    buildAppMenu()
+    if (isFolderSyncSmokeMode) prepareFolderSyncSmokeMode()
+    if (!isFolderSyncSmokeMode) buildAppMenu()
     loadLocalAuditLogs()
     initDb()
     logMain('initDb ok')
+    if (isFolderSyncSmokeMode) {
+      const report = await runFolderSyncSmokeTest()
+      app.exit(report.ok ? 0 : 1)
+      return
+    }
     startDbWatchTimer()
     broadcastUpdateState()
     createWindow()
@@ -1782,6 +2556,21 @@ app.whenReady().then(() => {
       const p = path.join(app.getPath('userData'), 'fatal.log')
       fs.appendFileSync(p, `[${new Date().toISOString()}] ${e?.stack || e?.message || e}\n`, 'utf8')
     } catch {}
+    if (isFolderSyncSmokeMode) {
+      writeFolderSyncSmokeReport({
+        mode: 'folder-sync',
+        ok: false,
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+        userDataPath: app.getPath('userData'),
+        error: String(e?.message || e || 'folder smoke 启动失败'),
+        stack: e?.stack || '',
+        steps: [],
+      })
+      console.error(`[folder-sync-smoke] ${e?.stack || e?.message || e}`)
+      app.exit(1)
+      return
+    }
     dialog.showErrorBox('AstraShell 启动失败', String(e?.message || e))
   }
 
@@ -2399,18 +3188,72 @@ ipcMain.handle('vault:key-get', async (_event, payload) => {
   }
 })
 
-ipcMain.handle('sync:login', async () => {
-  return { ok: true }
+ipcMain.handle('sync:login', async () => ({ ok: true }))
+ipcMain.handle('sync:get-config', async () => ({ ok: true, config: getSyncConfig() }))
+ipcMain.handle('sync:set-config', async (_event, payload) => {
+  const parsed = safeParse(syncSetConfigSchema, payload)
+  if (!parsed.ok) return { ok: false, error: parsed.error }
+  const nextConfig = {
+    ...parsed.data,
+    provider: parsed.data.provider === 'http' ? 'http' : 'folder',
+    targetPath: normalizeStoragePath(parsed.data.targetPath),
+    baseUrl: String(parsed.data.baseUrl || '').trim().replace(/\/+$/, ''),
+    token: String(parsed.data.token || '').trim(),
+  }
+  const localPath = normalizeStoragePath(resolveDbPath() || activeDbPath)
+  if (
+    nextConfig.provider === 'folder'
+    && localPath
+    && nextConfig.targetPath
+    && normalizeSyncPathForCompare(localPath) === normalizeSyncPathForCompare(nextConfig.targetPath)
+  ) {
+    return { ok: false, error: '同步目标不能与本地数据文件相同' }
+  }
+  const settings = readSettings()
+  settings.sync = nextConfig
+  writeSettings(settings)
+  updateSyncState((state) => {
+    state.remoteMeta = null
+    state.lastRemoteRevision = 0
+    state.lastError = ''
+    state.lastSuccessMessage = ''
+    state.queue = []
+  })
+  if (!nextConfig.enabled) cancelAutoSyncPushTimer()
+  broadcastSyncStatus()
+  return { ok: true, config: getSyncConfig() }
 })
-ipcMain.handle('sync:status', async () => {
-  return { ok: true, account: null, queueCount: 0 }
+ipcMain.handle('sync:status', async () => broadcastSyncStatus())
+ipcMain.handle('sync:test-connection', async () => testSyncConnection())
+ipcMain.handle('sync:pull-now', async () => {
+  const result = performSyncPull({ reason: 'manual-pull' })
+  broadcastSyncStatus()
+  return result
 })
-ipcMain.handle('sync:queue', async () => ({ ok: true, items: [] }))
+ipcMain.handle('sync:queue', async () => ({ ok: true, items: readSyncState().queue || [] }))
 ipcMain.handle('sync:clear-queue', async () => {
+  cancelAutoSyncPushTimer()
+  replaceSyncQueue([])
+  updateSyncState((state) => {
+    state.lastError = ''
+  })
+  broadcastSyncStatus()
   return { ok: true }
 })
 ipcMain.handle('sync:push-now', async () => {
-  return { ok: true, pushed: 0 }
+  cancelAutoSyncPushTimer()
+  const result = performSyncPush({ manual: true, reason: 'manual-push' })
+  broadcastSyncStatus()
+  return result
+})
+ipcMain.handle('sync:retry-failed', async () => {
+  cancelAutoSyncPushTimer()
+  const queue = readSyncState().queue || []
+  const hasPushTask = queue.some((item) => item.type === 'push')
+  if (!hasPushTask) return { ok: true, pushed: 0, message: '当前没有待重试的同步任务' }
+  const result = performSyncPush({ manual: true, reason: 'retry-failed' })
+  broadcastSyncStatus()
+  return result
 })
 
 ipcMain.handle('serial:list', async () => {

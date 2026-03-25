@@ -3,13 +3,11 @@ import { ref, type Ref } from 'vue'
 type UseStartupGateParams = {
   storageDbPath: Ref<string>
   dbFolderFromPath: (dbPath: string) => string
-  normalizeStoragePathForCompare: (value: string) => string
   vaultMaster: Ref<string>
   vaultStatus: Ref<string>
   vaultInitialized: Ref<boolean>
   vaultUnlocked: Ref<boolean>
   refreshVaultKeys: () => Promise<void>
-  checkVault: () => Promise<any>
   initVault: () => Promise<void>
   unlockVault: () => Promise<void>
   refreshHosts: () => Promise<unknown>
@@ -23,13 +21,11 @@ export function useStartupGate(params: UseStartupGateParams) {
   const {
     storageDbPath,
     dbFolderFromPath,
-    normalizeStoragePathForCompare,
     vaultMaster,
     vaultStatus,
     vaultInitialized,
     vaultUnlocked,
     refreshVaultKeys,
-    checkVault,
     initVault,
     unlockVault,
     refreshHosts,
@@ -40,7 +36,7 @@ export function useStartupGate(params: UseStartupGateParams) {
   } = params
 
   const startupGateVisible = ref(true)
-  const startupGateMode = ref<'loading' | 'select' | 'init' | 'unlock'>('loading')
+  const startupGateMode = ref<'loading' | 'init' | 'unlock'>('loading')
   const startupGateBusy = ref(false)
   const startupGateError = ref('')
   const startupDbPath = ref('')
@@ -77,74 +73,27 @@ export function useStartupGate(params: UseStartupGateParams) {
     startupMasterConfirm.value = ''
   }
 
-  const pickStartupDbPath = async () => {
-    const res = await window.lightterm.appPickStorageFile()
-    if (res.ok && res.filePath) {
-      startupDbPath.value = res.filePath
-      startupGateError.value = ''
-    }
-  }
+  const pickStartupDbPath = async () => {}
 
-  const pickStartupDbSavePath = async () => {
-    const res = await window.lightterm.appPickStorageSaveFile()
-    if (res.ok && res.filePath) {
-      startupDbPath.value = res.filePath
-      startupGateError.value = ''
-    }
-  }
+  const pickStartupDbSavePath = async () => {}
 
-  const pickStartupDbFolder = async () => {
-    const res = await window.lightterm.appPickStorageFolder()
-    if (res.ok && res.folder) {
-      startupDbPath.value = res.folder
-      startupGateError.value = ''
-    }
-  }
+  const pickStartupDbFolder = async () => {}
 
   const useCurrentDbPath = () => {
     startupDbPath.value = storageDbPath.value || dbFolderFromPath(storageDbPath.value)
     startupGateError.value = ''
   }
 
-  const applyStartupStoragePath = async () => {
-    const targetPath = startupDbPath.value.trim()
-    const currentPath = storageDbPath.value.trim()
-    if (!targetPath) return { ok: false, error: '请先选择数据文件路径' }
-    if (normalizeStoragePathForCompare(targetPath) === normalizeStoragePathForCompare(currentPath)) {
-      return { ok: true, changed: false }
-    }
-    const setRes = await window.lightterm.appSetStorageFolder({ folder: targetPath })
-    if (!setRes.ok) return { ok: false, error: setRes.error || '未知错误' }
-    startupGateError.value = '数据文件路径已设置，应用正在重启...'
-    await window.lightterm.appRestart()
-    return { ok: true, changed: true }
-  }
+  const applyStartupStoragePath = async () => ({ ok: true, changed: false })
 
   const runUseExistingStorage = async () => {
-    if (startupGateBusy.value) return
-    startupGateBusy.value = true
+    startupGateMode.value = 'unlock'
     startupGateError.value = ''
-    try {
-      const result = await applyStartupStoragePath()
-      if (!result.ok || result.changed) {
-        if (!result.ok) startupGateError.value = `数据文件路径设置失败：${result.error}`
-        return
-      }
-      const status = await checkVault()
-      if (!vaultInitialized.value || !status?.initialized) {
-        startupGateError.value = '当前文件不是已初始化的数据文件，请重新选择，或者改为初始化新数据库。'
-      }
-    } finally {
-      startupGateBusy.value = false
-    }
   }
 
   const runStartupInit = async () => {
     if (startupGateBusy.value) return
-    if (!startupDbPath.value.trim()) {
-      startupGateError.value = '请先选择数据文件路径'
-      return
-    }
+    ensureStartupDbPath()
     if (!vaultMaster.value) {
       startupGateError.value = '请设置主密码'
       return
@@ -156,12 +105,6 @@ export function useStartupGate(params: UseStartupGateParams) {
     startupGateBusy.value = true
     startupGateError.value = ''
     try {
-      const result = await applyStartupStoragePath()
-      if (!result.ok || result.changed) {
-        if (!result.ok) startupGateError.value = `数据文件路径设置失败：${result.error}`
-        return
-      }
-
       await initVault()
       if (!vaultUnlocked.value) {
         startupGateError.value = plainVaultMessage(vaultStatus.value) || '初始化失败'

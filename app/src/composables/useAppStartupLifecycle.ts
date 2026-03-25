@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 
 type NavKey = 'hosts' | 'sftp' | 'snippets' | 'serial' | 'local' | 'vault' | 'settings' | 'logs'
-type StartupGateMode = 'loading' | 'select' | 'init' | 'unlock'
+type StartupGateMode = 'loading' | 'init' | 'unlock'
 
 type UseAppStartupLifecycleParams = {
   startupGateVisible: Ref<boolean>
@@ -54,6 +54,7 @@ type UseAppStartupLifecycleParams = {
   resetLocalQuickDraft: () => void
   loadTerminalEncoding: () => void
   refreshBackupList: () => Promise<void>
+  runStartupSyncPull: () => Promise<void>
 }
 
 export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
@@ -104,6 +105,7 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
     resetLocalQuickDraft,
     loadTerminalEncoding,
     refreshBackupList,
+    runStartupSyncPull,
   } = params
 
   const bindStartupError = (message: string) => {
@@ -139,27 +141,27 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
   const syncVaultGateState = async () => {
     const res = await checkVaultStatus()
     if (!res) {
-      startupGateMode.value = 'select'
+      startupGateMode.value = 'init'
       startupGateVisible.value = true
       return null
     }
     if (!res.configured) {
-      startupGateMode.value = 'select'
+      startupGateMode.value = 'init'
       startupGateVisible.value = true
-      startupGateError.value = '请先选择是初始化新数据库，还是使用已有数据库。'
+      startupGateError.value = '正在准备默认本地数据库...'
       return res
     }
     startupGateEnsureDbPath()
     if (res.error) {
-      startupGateMode.value = 'select'
+      startupGateMode.value = 'init'
       startupGateVisible.value = true
       startupGateError.value = `数据文件读取失败：${res.error}`
       return res
     }
     if (!res.exists) {
-      startupGateMode.value = 'select'
+      startupGateMode.value = 'init'
       startupGateVisible.value = true
-      startupGateError.value = '当前路径还没有数据文件。首次使用请选择初始化；如果你要使用已有数据库，请重新选择正确文件。'
+      startupGateError.value = '首次使用请先设置主密码，系统会自动创建本地数据库。'
       return res
     }
     evaluateVaultGate()
@@ -236,6 +238,7 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
   const handleStartupGateVisibleChange = (visible: boolean) => {
     if (visible) return
     void runPostUnlockStartupTasks()
+    void runStartupSyncPull()
     if (sessionRestoreTried.value) return
     sessionRestoreTried.value = true
     void restoreLastSessionIfNeeded()
@@ -250,7 +253,7 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
       await syncVaultGateState()
     } catch (error) {
       startupGateError.value = `启动检查失败：${formatAppError(error)}`
-      if (startupGateMode.value === 'loading') startupGateMode.value = 'select'
+      if (startupGateMode.value === 'loading') startupGateMode.value = 'init'
     }
 
     restoreSshTabs()
@@ -261,6 +264,7 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
     if (startupGateVisible.value) return
 
     await runPostUnlockStartupTasks()
+    void runStartupSyncPull()
     sessionRestoreTried.value = true
     await restoreLastSessionIfNeeded()
   }

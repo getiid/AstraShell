@@ -1,0 +1,8 @@
+如果安装后提示“已损坏”或无法打开：
+
+1. 打开“终端”
+2. 执行下面这条命令
+
+xattr -dr com.apple.quarantine /Applications/AstraShell.app
+
+3. 执行完成后，再次打开 AstraShell

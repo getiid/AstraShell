@@ -49,10 +49,16 @@ declare global {
       vaultKeyImportFile: () => Promise<{ ok: boolean; content?: string; detectedType?: string; filePath?: string; raw?: string; error?: string }>
 
       syncLogin: (payload: { provider?: string; userId?: string; token?: string }) => Promise<{ ok: boolean; error?: string }>
-      syncStatus: () => Promise<{ ok: boolean; account?: any; queueCount?: number }>
+      syncGetConfig: () => Promise<{ ok: boolean; config?: { enabled: boolean; provider: 'folder' | 'http'; targetPath: string; baseUrl: string; token: string; autoPullOnStartup: boolean; autoPushOnChange: boolean; debounceMs: number }; error?: string }>
+      syncSetConfig: (payload: { enabled: boolean; provider: 'folder' | 'http'; targetPath: string; baseUrl: string; token: string; autoPullOnStartup: boolean; autoPushOnChange: boolean; debounceMs: number }) => Promise<{ ok: boolean; config?: { enabled: boolean; provider: 'folder' | 'http'; targetPath: string; baseUrl: string; token: string; autoPullOnStartup: boolean; autoPushOnChange: boolean; debounceMs: number }; error?: string }>
+      syncStatus: () => Promise<{ ok: boolean; config?: any; state?: any; local?: any; remote?: any; queueCount?: number; error?: string }>
+      syncTestConnection: () => Promise<{ ok: boolean; provider?: string; targetPath?: string; remote?: any; error?: string }>
+      syncPullNow: () => Promise<{ ok: boolean; changed?: boolean; pulled?: number; message?: string; conflict?: boolean; error?: string }>
       syncQueue: () => Promise<{ ok: boolean; items?: any[] }>
       syncClearQueue: () => Promise<{ ok: boolean }>
-      syncPushNow: () => Promise<{ ok: boolean; pushed?: number }>
+      syncPushNow: () => Promise<{ ok: boolean; pushed?: number; message?: string; conflict?: boolean; error?: string }>
+      syncRetryFailed: () => Promise<{ ok: boolean; pushed?: number; message?: string; conflict?: boolean; error?: string }>
+      onSyncStatus: (handler: (data: { ok: boolean; config?: any; state?: any; local?: any; remote?: any; queueCount?: number; error?: string }) => void) => void
 
       listSerialPorts: () => Promise<any[]>
       openSerial: (options: {

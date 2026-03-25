@@ -13,6 +13,7 @@ export function useWindowBridgeEvents(params: {
   sftpUploadProgress: Ref<number>
   sftpDownloadProgress: Ref<number>
   mergeUpdateState: (payload: any) => void
+  mergeSyncStatus: (payload: any) => void
   scheduleStorageDataRefresh: () => void
   appendAuditLog: (item: any) => void
   hideAllMenus: () => void
@@ -33,6 +34,7 @@ export function useWindowBridgeEvents(params: {
     sftpUploadProgress,
     sftpDownloadProgress,
     mergeUpdateState,
+    mergeSyncStatus,
     scheduleStorageDataRefresh,
     appendAuditLog,
     hideAllMenus,
@@ -64,6 +66,7 @@ export function useWindowBridgeEvents(params: {
       if (payload.type === 'download') sftpDownloadProgress.value = payload.percent
     })
     window.lightterm.onUpdateStatus((payload) => mergeUpdateState(payload))
+    window.lightterm.onSyncStatus((payload) => mergeSyncStatus(payload))
     window.lightterm.onStorageDataChanged(() => scheduleStorageDataRefresh())
     window.lightterm.onAuditAppended((item) => appendAuditLog(item))
     window.addEventListener('click', hideAllMenus)

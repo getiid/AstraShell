@@ -16,6 +16,7 @@ import { useSshConnection } from '../composables/useSshConnection'
 import { useTextContextMenu } from '../composables/useTextContextMenu'
 import { useStartupGate } from '../composables/useStartupGate'
 import { useSshTabActions } from '../composables/useSshTabActions'
+import { useSyncManager } from '../composables/useSyncManager'
 import { useStorageManager } from '../composables/useStorageManager'
 import { useTerminalRuntime } from '../composables/useTerminalRuntime'
 import { useTerminalTabs } from '../composables/useTerminalTabs'
@@ -811,7 +812,6 @@ const {
   backupItems,
   selectedBackupPath,
   dbFolderFromPath,
-  normalizeStoragePathForCompare,
   refreshStorageInfo: refreshStorageInfoRaw,
   refreshStorageOverview: refreshStorageOverviewRaw,
   refreshStorageDataNow: refreshStorageDataNowRaw,
@@ -836,6 +836,44 @@ const {
 })
 
 const {
+  syncEnabled,
+  syncProvider,
+  syncTargetPath,
+  syncBaseUrl,
+  syncToken,
+  syncAutoPullOnStartup,
+  syncAutoPushOnChange,
+  syncDebounceMs,
+  syncBusy,
+  syncMsg,
+  syncQueueItems,
+  syncState,
+  syncRemoteMeta,
+  syncQueueCount,
+  syncRuntimeStatusText,
+  syncStatusText,
+  formatSyncTime,
+  mergeSyncStatus,
+  refreshSyncStatus,
+  refreshSyncQueue,
+  saveSyncConfig,
+  pickSyncFile,
+  pickSyncSaveFile,
+  pickSyncFolder,
+  testSyncConnection,
+  syncPullNow,
+  syncPushNow,
+  syncRetryFailed,
+  clearSyncQueue,
+  runStartupSyncPull,
+} = useSyncManager({
+  refreshStorageDataNow: async () => refreshStorageDataNowRaw(),
+})
+
+void refreshSyncStatus()
+void refreshSyncQueue()
+
+const {
   startupGateVisible,
   startupGateMode,
   startupGateBusy,
@@ -856,13 +894,11 @@ const {
 } = useStartupGate({
   storageDbPath,
   dbFolderFromPath,
-  normalizeStoragePathForCompare,
   vaultMaster,
   vaultStatus,
   vaultInitialized,
   vaultUnlocked,
   refreshVaultKeys,
-  checkVault: checkVaultStatus,
   initVault,
   unlockVault,
   refreshHosts: async () => refreshHosts(),
@@ -931,6 +967,7 @@ const {
   resetLocalQuickDraft,
   loadTerminalEncoding,
   refreshBackupList,
+  runStartupSyncPull,
 })
 
 const settingsPanelVm = {
@@ -957,6 +994,33 @@ const settingsPanelVm = {
   selectedBackupPath,
   backupItems,
   restoreDataBackup,
+  syncEnabled,
+  syncProvider,
+  syncTargetPath,
+  syncBaseUrl,
+  syncToken,
+  syncAutoPullOnStartup,
+  syncAutoPushOnChange,
+  syncDebounceMs,
+  syncBusy,
+  syncMsg,
+  syncState,
+  syncRemoteMeta,
+  syncQueueItems,
+  syncQueueCount,
+  syncStatusText,
+  formatSyncTime,
+  saveSyncConfig,
+  refreshSyncStatus,
+  refreshSyncQueue,
+  pickSyncFile,
+  pickSyncSaveFile,
+  pickSyncFolder,
+  testSyncConnection,
+  syncPullNow,
+  syncPushNow,
+  syncRetryFailed,
+  clearSyncQueue,
 }
 
 const vaultPanelVm = {
@@ -1061,7 +1125,7 @@ const textContextMenuVm = {
   selectAllFromTextMenu,
 }
 
-const statusText = computed(() => snippetStatus.value || sftpStatus.value || sshStatus.value || localStatus.value || auditStatus.value || '就绪')
+const statusText = computed(() => snippetStatus.value || sftpStatus.value || sshStatus.value || localStatus.value || syncRuntimeStatusText.value || auditStatus.value || '就绪')
 
 const statusBarVm = {
   statusText,
@@ -1109,6 +1173,7 @@ useWindowBridgeEvents({
   sftpUploadProgress,
   sftpDownloadProgress,
   mergeUpdateState,
+  mergeSyncStatus,
   scheduleStorageDataRefresh,
   appendAuditLog,
   hideAllMenus,

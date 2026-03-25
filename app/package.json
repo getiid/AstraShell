@@ -16,6 +16,7 @@
     "check": "npm run lint && npm run test && npm run build:web",
     "build:web": "npm run typecheck && vite build",
     "build": "npm run build:web",
+    "smoke:sync:folder": "node scripts/smoke-folder-sync.mjs",
     "preview": "vite preview",
     "start": "electron .",
     "dist": "npm run build && electron-builder -mwl"
@@ -85,7 +86,7 @@
           "x": 297,
           "y": 420,
           "type": "file",
-          "path": "build/AstraShell Repair.command"
+          "path": "build/AstraShell 安装说明.txt"
         }
       ]
     },

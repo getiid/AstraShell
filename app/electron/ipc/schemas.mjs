@@ -15,6 +15,17 @@ export const setStorageFolderSchema = z.object({
   folder: nonEmpty,
 })
 
+export const syncSetConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  provider: z.enum(['folder', 'http']).default('folder'),
+  targetPath: z.string().trim().default(''),
+  baseUrl: z.string().trim().default(''),
+  token: z.string().trim().default(''),
+  autoPullOnStartup: z.boolean().default(true),
+  autoPushOnChange: z.boolean().default(true),
+  debounceMs: z.coerce.number().int().min(300).max(60000).default(1500),
+})
+
 export const localFsListSchema = z.object({
   localPath: z.string().trim().optional(),
 })
