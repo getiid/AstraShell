@@ -36,6 +36,18 @@ contextBridge.exposeInMainWorld('lightterm', {
   quicktoolsGetState: () => ipcRenderer.invoke('quicktools:get-state'),
   quicktoolsSetState: (payload) => ipcRenderer.invoke('quicktools:set-state', payload),
 
+  dbListConnections: () => ipcRenderer.invoke('db:list-connections'),
+  dbSaveConnection: (payload) => ipcRenderer.invoke('db:save-connection', payload),
+  dbDeleteConnection: (payload) => ipcRenderer.invoke('db:delete-connection', payload),
+  dbConnect: (payload) => ipcRenderer.invoke('db:connect', payload),
+  dbDisconnect: (payload) => ipcRenderer.invoke('db:disconnect', payload),
+  dbListDatabases: (payload) => ipcRenderer.invoke('db:list-databases', payload),
+  dbSelectDatabase: (payload) => ipcRenderer.invoke('db:select-database', payload),
+  dbListTables: (payload) => ipcRenderer.invoke('db:list-tables', payload),
+  dbQuery: (payload) => ipcRenderer.invoke('db:query', payload),
+  dbExportQuery: (payload) => ipcRenderer.invoke('db:export-query', payload),
+  dbPreviewTable: (payload) => ipcRenderer.invoke('db:preview-table', payload),
+
   vaultStatus: () => ipcRenderer.invoke('vault:status'),
   vaultSetMaster: (payload) => ipcRenderer.invoke('vault:set-master', payload),
   vaultUnlock: (payload) => ipcRenderer.invoke('vault:unlock', payload),

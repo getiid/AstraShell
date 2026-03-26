@@ -7,6 +7,7 @@ import crypto from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { v4 as uuidv4 } from 'uuid'
 import { safeParse, setStorageFolderSchema, syncSetConfigSchema } from './ipc/schemas.mjs'
+import { registerDatabaseIpc } from './ipc/database.mjs'
 import { registerLocalFsIpc } from './ipc/localfs.mjs'
 import { registerLocalIpc } from './ipc/local.mjs'
 import { registerSftpIpc } from './ipc/sftp.mjs'
@@ -519,6 +520,7 @@ function getFileSnapshotMeta(filePath) {
     ? parsed.sync_meta.summary
     : null
   const hosts = Number(summary?.hosts || (Array.isArray(parsed?.hosts) ? parsed.hosts.length : 0))
+  const dbConnections = Number(summary?.dbConnections || (Array.isArray(parsed?.db_connections) ? parsed.db_connections.length : 0))
   const snippets = Number(summary?.snippets || (Array.isArray(parsed?.snippets) ? parsed.snippets.length : 0))
   const vaultKeys = Number(summary?.vaultKeys || (Array.isArray(parsed?.vault_keys) ? parsed.vault_keys.length : 0))
   const quickTools = Number(summary?.quickTools || (Array.isArray(parsed?.quick_tools) ? parsed.quick_tools.length : 0))
@@ -533,10 +535,11 @@ function getFileSnapshotMeta(filePath) {
     revision: Number(parsed?.revision || 0),
     signature: getFileSignatureByPath(normalizedPath),
     hosts,
+    dbConnections,
     snippets,
     vaultKeys,
     quickTools,
-    itemCount: hosts + snippets + vaultKeys + quickTools,
+    itemCount: hosts + dbConnections + snippets + vaultKeys + quickTools,
   }
 }
 
@@ -544,6 +547,7 @@ function parseSyncRemoteMeta(input, fallback = {}) {
   const meta = input?.meta && typeof input.meta === 'object' ? input.meta : input
   const summary = meta?.summary && typeof meta.summary === 'object' ? meta.summary : fallback.summary || {}
   const hosts = Number(meta?.hosts || summary?.hosts || fallback.hosts || 0)
+  const dbConnections = Number(meta?.dbConnections || summary?.dbConnections || fallback.dbConnections || 0)
   const snippets = Number(meta?.snippets || summary?.snippets || fallback.snippets || 0)
   const vaultKeys = Number(meta?.vaultKeys || summary?.vaultKeys || fallback.vaultKeys || 0)
   const quickTools = Number(meta?.quickTools || summary?.quickTools || fallback.quickTools || 0)
@@ -558,10 +562,11 @@ function parseSyncRemoteMeta(input, fallback = {}) {
     revision: Number(meta?.revision || fallback.revision || 0),
     signature: String(meta?.signature || fallback.signature || ''),
     hosts,
+    dbConnections,
     snippets,
     vaultKeys,
     quickTools,
-    itemCount: Number(meta?.itemCount || summary?.itemCount || fallback.itemCount || (hosts + snippets + vaultKeys + quickTools)),
+    itemCount: Number(meta?.itemCount || summary?.itemCount || fallback.itemCount || (hosts + dbConnections + snippets + vaultKeys + quickTools)),
   }
 }
 
@@ -1162,6 +1167,7 @@ class JsonDB {
       storage_version: 2,
       hosts: [],
       host_meta: { extra_categories: [], updated_at: 0 },
+      db_connections: [],
       snippets: [],
       snippet_meta: { extra_categories: [], updated_at: 0 },
       vault_meta: null,
@@ -1180,6 +1186,7 @@ class JsonDB {
   clearDecryptedData() {
     this.data.hosts = []
     this.data.host_meta = { extra_categories: [], updated_at: 0 }
+    this.data.db_connections = []
     this.data.snippets = []
     this.data.snippet_meta = { extra_categories: [], updated_at: 0 }
     this.data.vault_keys = []
@@ -1213,6 +1220,7 @@ class JsonDB {
       const parsed = JSON.parse(raw)
       this.data = { ...this.data, ...parsed }
       this.data.host_meta = normalizeHostMeta(this.data.host_meta)
+      this.data.db_connections = Array.isArray(this.data.db_connections) ? this.data.db_connections : []
       this.data.snippet_meta = mergeSnippetMeta(null, this.data.snippet_meta)
       this.data.file_id = String(this.data.file_id || uuidv4())
       this.data.revision = Number(this.data.revision || 0)
@@ -1269,6 +1277,7 @@ class JsonDB {
           revision: Number(diskParsed.revision || 0),
           hosts: Array.isArray(diskParsed.hosts) ? diskParsed.hosts : [],
           host_meta: normalizeHostMeta(diskParsed.host_meta),
+          db_connections: Array.isArray(diskParsed.db_connections) ? diskParsed.db_connections : [],
           snippets: Array.isArray(diskParsed.snippets) ? diskParsed.snippets : [],
           snippet_meta: diskParsed.snippet_meta && typeof diskParsed.snippet_meta === 'object'
             ? diskParsed.snippet_meta
@@ -1397,6 +1406,10 @@ function getSnippetUpdatedAt(row) {
   return Number(row?.updatedAt || row?.updated_at || 0)
 }
 
+function getDbConnectionUpdatedAt(row) {
+  return Number(row?.updated_at || row?.updatedAt || row?.created_at || row?.createdAt || 0)
+}
+
 function getAuditUpdatedAt(row) {
   return Number(row?.ts || row?.updatedAt || row?.updated_at || 0)
 }
@@ -1455,6 +1468,7 @@ function mergeDbData(baseData, incomingData) {
     storage_version: Math.max(Number(baseData?.storage_version || 1), Number(incomingData?.storage_version || 1), 2),
     hosts: mergeRowsById(baseData?.hosts, incomingData?.hosts, getHostUpdatedAt),
     host_meta: mergeSnippetMeta(baseData?.host_meta, incomingData?.host_meta),
+    db_connections: mergeRowsById(baseData?.db_connections, incomingData?.db_connections, getDbConnectionUpdatedAt),
     snippets: mergeRowsById(baseData?.snippets, incomingData?.snippets, getSnippetUpdatedAt),
     snippet_meta: mergeSnippetMeta(baseData?.snippet_meta, incomingData?.snippet_meta),
     vault_meta: null,
@@ -1494,6 +1508,7 @@ function buildSyncSnapshotContent(plainContent, password) {
   const parsed = JSON.parse(raw)
   const summary = {
     hosts: Array.isArray(parsed?.hosts) ? parsed.hosts.length : 0,
+    dbConnections: Array.isArray(parsed?.db_connections) ? parsed.db_connections.length : 0,
     snippets: Array.isArray(parsed?.snippets) ? parsed.snippets.length : 0,
     vaultKeys: Array.isArray(parsed?.vault_keys) ? parsed.vault_keys.length : 0,
     quickTools: Array.isArray(parsed?.quick_tools) ? parsed.quick_tools.length : 0,
@@ -1515,7 +1530,7 @@ function buildSyncSnapshotContent(plainContent, password) {
       verifier_hash: verifierHash,
       summary: {
         ...summary,
-        itemCount: summary.hosts + summary.snippets + summary.vaultKeys + summary.quickTools,
+        itemCount: summary.hosts + summary.dbConnections + summary.snippets + summary.vaultKeys + summary.quickTools,
       },
     },
     encrypted_payload: encryptedPayload,
@@ -1806,11 +1821,13 @@ function getStorageMeta() {
     revision: Number(currentDb?.data?.revision || 0),
     signature: String(currentDb?.lastFileSignature || ''),
     hosts: Array.isArray(currentDb?.data?.hosts) ? currentDb.data.hosts.length : 0,
+    dbConnections: Array.isArray(currentDb?.data?.db_connections) ? currentDb.data.db_connections.length : 0,
     snippets: Array.isArray(currentDb?.data?.snippets) ? currentDb.data.snippets.length : 0,
     vaultKeys: Array.isArray(currentDb?.data?.vault_keys) ? currentDb.data.vault_keys.length : 0,
     quickTools: Array.isArray(currentDb?.data?.quick_tools) ? currentDb.data.quick_tools.length : 0,
     itemCount:
       (Array.isArray(currentDb?.data?.hosts) ? currentDb.data.hosts.length : 0)
+      + (Array.isArray(currentDb?.data?.db_connections) ? currentDb.data.db_connections.length : 0)
       + (Array.isArray(currentDb?.data?.snippets) ? currentDb.data.snippets.length : 0)
       + (Array.isArray(currentDb?.data?.vault_keys) ? currentDb.data.vault_keys.length : 0)
       + (Array.isArray(currentDb?.data?.quick_tools) ? currentDb.data.quick_tools.length : 0),
@@ -3551,4 +3568,17 @@ registerLocalFsIpc(ipcMain)
 registerSftpIpc(ipcMain, {
   withSftp,
   broadcast,
+})
+
+registerDatabaseIpc(ipcMain, {
+  app,
+  BrowserWindow,
+  dialog,
+  fs,
+  path,
+  requireDbReady,
+  refreshDbFromDisk,
+  uuidv4,
+  logMain,
+  appendAuditLog,
 })

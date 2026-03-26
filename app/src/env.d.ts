@@ -1,13 +1,34 @@
 /// <reference types="vite/client" />
 
 type SSHConfig = { host: string; port?: number; username: string; password?: string; privateKey?: string; passphrase?: string }
+type DbEngine = 'MySQL' | 'MariaDB' | 'PostgreSQL' | 'SQL Server'
+type DbState = 'connected' | 'idle' | 'offline'
+type DbTableItem = { name: string; tableName?: string; schemaName?: string; rows: number; size: string; updatedAt: string }
+type DbConnectionItem = {
+  id: string
+  name: string
+  engine: DbEngine
+  host: string
+  port: number
+  username: string
+  password?: string
+  database: string
+  note: string
+  state: DbState
+  version: string
+  latency: string
+  databases: string[]
+  schemas: string[]
+  tables: DbTableItem[]
+  lastError?: string
+}
 
 declare global {
   interface Window {
     lightterm: {
       appGetStorage: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string }>
-      appGetStorageMeta: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; decryptState?: string; unlockRequired?: boolean; storageVersion?: number; fileId?: string; revision?: number; signature?: string; hosts?: number; snippets?: number; vaultKeys?: number; quickTools?: number; itemCount?: number; logs?: number }>
-      appRefreshStorageData: () => Promise<{ ok: boolean; changed?: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; decryptState?: string; unlockRequired?: boolean; storageVersion?: number; fileId?: string; revision?: number; signature?: string; hosts?: number; snippets?: number; vaultKeys?: number; quickTools?: number; itemCount?: number; logs?: number; error?: string }>
+      appGetStorageMeta: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; decryptState?: string; unlockRequired?: boolean; storageVersion?: number; fileId?: string; revision?: number; signature?: string; hosts?: number; dbConnections?: number; snippets?: number; vaultKeys?: number; quickTools?: number; itemCount?: number; logs?: number }>
+      appRefreshStorageData: () => Promise<{ ok: boolean; changed?: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; decryptState?: string; unlockRequired?: boolean; storageVersion?: number; fileId?: string; revision?: number; signature?: string; hosts?: number; dbConnections?: number; snippets?: number; vaultKeys?: number; quickTools?: number; itemCount?: number; logs?: number; error?: string }>
       appPickStorageFolder: () => Promise<{ ok: boolean; folder?: string; error?: string }>
       appPickStorageFile: () => Promise<{ ok: boolean; filePath?: string; error?: string }>
       appPickStorageSaveFile: () => Promise<{ ok: boolean; filePath?: string; error?: string }>
@@ -39,6 +60,17 @@ declare global {
       snippetsSetState: (payload: { items: any[]; extraCategories: string[] }) => Promise<{ ok: boolean; items?: any[]; extraCategories?: string[]; error?: string }>
       quicktoolsGetState: () => Promise<{ ok: boolean; items?: any[]; error?: string }>
       quicktoolsSetState: (payload: { items: any[] }) => Promise<{ ok: boolean; items?: any[]; error?: string }>
+      dbListConnections: () => Promise<{ ok: boolean; items?: DbConnectionItem[]; error?: string }>
+      dbSaveConnection: (payload: { id?: string; name: string; engine: DbEngine; host: string; port: number; username: string; password?: string; database?: string; note?: string }) => Promise<{ ok: boolean; id?: string; item?: DbConnectionItem; error?: string }>
+      dbDeleteConnection: (payload: { id: string }) => Promise<{ ok: boolean; error?: string }>
+      dbConnect: (payload: { id: string }) => Promise<{ ok: boolean; item?: DbConnectionItem; error?: string }>
+      dbDisconnect: (payload: { id: string }) => Promise<{ ok: boolean; item?: DbConnectionItem; error?: string }>
+      dbListDatabases: (payload: { id: string }) => Promise<{ ok: boolean; item?: DbConnectionItem; databases?: string[]; error?: string }>
+      dbSelectDatabase: (payload: { id: string; database: string }) => Promise<{ ok: boolean; item?: DbConnectionItem; databases?: string[]; tables?: DbTableItem[]; schemas?: string[]; error?: string }>
+      dbListTables: (payload: { id: string }) => Promise<{ ok: boolean; item?: DbConnectionItem; tables?: DbTableItem[]; schemas?: string[]; error?: string }>
+      dbQuery: (payload: { id: string; sql: string }) => Promise<{ ok: boolean; item?: DbConnectionItem; columns?: string[]; rows?: Array<Record<string, unknown>>; summary?: string; error?: string }>
+      dbExportQuery: (payload: { id?: string; name?: string; columns: string[]; rows: Array<Record<string, unknown>> }) => Promise<{ ok: boolean; filePath?: string; error?: string }>
+      dbPreviewTable: (payload: { id: string; tableName: string; schemaName?: string; limit?: number }) => Promise<{ ok: boolean; item?: DbConnectionItem; sql?: string; columns?: string[]; rows?: Array<Record<string, unknown>>; summary?: string; error?: string }>
 
       vaultStatus: () => Promise<{ ok: boolean; configured?: boolean; exists?: boolean; initialized: boolean; unlocked: boolean; requiresPassword?: boolean; decryptFailed?: boolean; error?: string }>
       vaultSetMaster: (payload: { masterPassword: string }) => Promise<{ ok: boolean; error?: string }>

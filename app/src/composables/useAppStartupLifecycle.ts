@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
 
-type NavKey = 'hosts' | 'sftp' | 'snippets' | 'serial' | 'local' | 'vault' | 'settings' | 'logs'
+type NavKey = 'hosts' | 'sftp' | 'snippets' | 'serial' | 'local' | 'database' | 'vault' | 'settings' | 'logs'
 type StartupGateMode = 'loading' | 'init' | 'unlock'
 
 type UseAppStartupLifecycleParams = {
@@ -212,6 +212,11 @@ export function useAppStartupLifecycle(params: UseAppStartupLifecycleParams) {
     }
 
     if (value === 'local') {
+      if (!snippetsLoaded.value) await restoreSnippets()
+      return
+    }
+
+    if (value === 'database') {
       if (!snippetsLoaded.value) await restoreSnippets()
       return
     }

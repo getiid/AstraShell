@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useAuditManager } from '../composables/useAuditManager'
+import { useDatabaseWorkspace } from '../composables/useDatabaseWorkspace'
 import { useAppStartupLifecycle } from '../composables/useAppStartupLifecycle'
 import { useAppShellSupport } from '../composables/useAppShellSupport'
 import { useHostWorkspace } from '../composables/useHostWorkspace'
@@ -25,6 +26,7 @@ import { useVaultManager } from '../composables/useVaultManager'
 import { useWindowBridgeEvents } from '../composables/useWindowBridgeEvents'
 import AppSidebar from './AppSidebar.vue'
 import AppStatusBar from './AppStatusBar.vue'
+import DatabasePanel from './panels/DatabasePanel.vue'
 import HostsPanel from './panels/HostsPanel.vue'
 import LocalPanel from './panels/LocalPanel.vue'
 import LogsPanel from './panels/LogsPanel.vue'
@@ -38,7 +40,7 @@ import TextContextMenu from './TextContextMenu.vue'
 import VaultPanel from './panels/VaultPanel.vue'
 import '@xterm/xterm/css/xterm.css'
 
-type NavKey = 'hosts' | 'sftp' | 'snippets' | 'serial' | 'local' | 'vault' | 'settings' | 'logs'
+type NavKey = 'hosts' | 'sftp' | 'snippets' | 'serial' | 'local' | 'database' | 'vault' | 'settings' | 'logs'
 const nav = ref<NavKey>('hosts')
 const termEl = ref<HTMLElement | null>(null)
 
@@ -417,6 +419,7 @@ connectSSH = sshConnection.connectSSH
 connectSSHFromHosts = sshConnection.connectSSHFromHosts
 
 const {
+  snippetItems,
   snippetsLoaded,
   snippetKeyword,
   snippetCategory,
@@ -729,6 +732,87 @@ const logsPanelVm = {
   formatAuditTime,
   currentAuditLogs,
   formatAuditAction,
+}
+
+const {
+  databaseItems,
+  filteredDatabaseItems,
+  filteredDatabaseCatalogs,
+  selectedDatabaseId,
+  selectedDatabase,
+  databaseKeyword,
+  databaseStatus,
+  databaseQuery,
+  queryResultColumns,
+  queryResultRows,
+  queryResultSummary,
+  databaseMetrics,
+  databaseSnippetItems,
+  databaseSnippetCategories,
+  activeDatabaseSnippetCategory,
+  currentDatabaseSnippetItems,
+  databaseContextActions,
+  databaseStateLabel,
+  databaseStateClass,
+  selectDatabaseConnection,
+  loadDatabaseCatalogs,
+  connectDatabaseConnection,
+  disconnectDatabaseConnection,
+  selectDatabaseCatalog,
+  importDatabaseConnection,
+  exportDatabaseConnection,
+  openDatabaseQuery,
+  deleteDatabaseConnection,
+  createDatabaseConnection,
+  editDatabaseConnection,
+  executeDatabaseQuery,
+  exportDatabaseQueryResult,
+  insertDatabaseSnippet,
+  selectDatabaseSnippetCategory,
+  previewDatabaseTable,
+  openDatabaseSnippets,
+} = useDatabaseWorkspace({
+  openSnippetsPanel,
+  snippetItems,
+})
+
+const databasePanelVm = {
+  databaseItems,
+  filteredDatabaseItems,
+  filteredDatabaseCatalogs,
+  selectedDatabaseId,
+  selectedDatabase,
+  databaseKeyword,
+  databaseStatus,
+  databaseQuery,
+  queryResultColumns,
+  queryResultRows,
+  queryResultSummary,
+  databaseMetrics,
+  databaseSnippetItems,
+  databaseSnippetCategories,
+  activeDatabaseSnippetCategory,
+  currentDatabaseSnippetItems,
+  databaseContextActions,
+  databaseStateLabel,
+  databaseStateClass,
+  selectDatabaseConnection,
+  loadDatabaseCatalogs,
+  connectDatabaseConnection,
+  disconnectDatabaseConnection,
+  selectDatabaseCatalog,
+  importDatabaseConnection,
+  exportDatabaseConnection,
+  openDatabaseQuery,
+  deleteDatabaseConnection,
+  createDatabaseConnection,
+  editDatabaseConnection,
+  executeDatabaseQuery,
+  exportDatabaseQueryResult,
+  insertDatabaseSnippet,
+  selectDatabaseSnippetCategory,
+  previewDatabaseTable,
+  openDatabaseSnippets,
 }
 
 const serialPanelVm = {
@@ -1229,7 +1313,23 @@ const {
   sshTabs,
 })
 
-const statusText = computed(() => snippetStatus.value || sftpStatus.value || sshStatus.value || localStatus.value || syncRuntimeStatusText.value || auditStatus.value || '就绪')
+const statusText = computed(() => {
+  if (focusTerminal.value) {
+    if (activeTerminalMode.value === 'local') return localStatus.value || '本地终端就绪'
+    if (activeTerminalMode.value === 'serial') return sshStatus.value || '串口终端就绪'
+    return sshStatus.value || 'SSH 终端就绪'
+  }
+
+  if (nav.value === 'database') return databaseStatus.value || '数据库工作台已就绪'
+  if (nav.value === 'snippets') return snippetStatus.value || '代码片段已就绪'
+  if (nav.value === 'sftp') return sftpStatus.value || 'SFTP 工作台已就绪'
+  if (nav.value === 'local') return localStatus.value || '本地终端已就绪'
+  if (nav.value === 'logs') return auditStatus.value || '操作日志已就绪'
+  if (nav.value === 'settings') return syncRuntimeStatusText.value || '设置中心已就绪'
+  if (nav.value === 'vault') return vaultStatus.value || '密钥库已就绪'
+
+  return sshStatus.value || '就绪'
+})
 
 const statusBarVm = {
   statusText,
@@ -1311,6 +1411,8 @@ useWindowBridgeEvents({
       <SerialPanel v-else-if="!focusTerminal && nav === 'serial'" :vm="serialPanelVm" />
 
       <LocalPanel v-else-if="!focusTerminal && nav === 'local'" :vm="localPanelVm" />
+
+      <DatabasePanel v-else-if="!focusTerminal && nav === 'database'" :vm="databasePanelVm" />
 
       <VaultPanel v-else-if="!focusTerminal && nav === 'vault'" :vm="vaultPanelVm" />
 

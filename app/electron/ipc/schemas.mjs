@@ -95,6 +95,48 @@ export const sftpUploadSchema = remoteConnSchema.extend({
   remoteFileName: z.string().trim().optional(),
 })
 
+const dbEngineSchema = z.enum(['MySQL', 'MariaDB', 'PostgreSQL', 'SQL Server'])
+
+export const dbConnectionIdSchema = z.object({
+  id: nonEmpty,
+})
+
+export const dbSelectDatabaseSchema = z.object({
+  id: nonEmpty,
+  database: nonEmpty,
+})
+
+export const dbConnectionSchema = z.object({
+  id: z.string().trim().optional(),
+  name: nonEmpty,
+  engine: dbEngineSchema,
+  host: nonEmpty,
+  port: z.coerce.number().int().min(1).max(65535),
+  username: nonEmpty,
+  password: z.string().default(''),
+  database: z.string().trim().default(''),
+  note: z.string().trim().default(''),
+})
+
+export const dbQuerySchema = z.object({
+  id: nonEmpty,
+  sql: nonEmpty,
+})
+
+export const dbExportQuerySchema = z.object({
+  id: z.string().trim().optional(),
+  name: z.string().trim().default('query-result'),
+  columns: z.array(z.string()).default([]),
+  rows: z.array(z.record(z.string(), z.any())).default([]),
+})
+
+export const dbPreviewTableSchema = z.object({
+  id: nonEmpty,
+  tableName: nonEmpty,
+  schemaName: z.string().trim().optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
+})
+
 export function safeParse(schema, payload) {
   const parsed = schema.safeParse(payload ?? {})
   if (!parsed.success) {
