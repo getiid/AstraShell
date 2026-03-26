@@ -97,7 +97,7 @@ AstraShell 现在采用固定本地数据库方案：
 | iOS | Expo / React Native | 开发中 |
 
 - 当前桌面端版本号来源：`app/package.json`
-- 当前仓库桌面端版本：`0.3.13`
+- 当前仓库桌面端版本：`0.3.14`
 - 历史发布说明位于：[`docs/release-notes/`](docs/release-notes)
 
 ## 本地开发

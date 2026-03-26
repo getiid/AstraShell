@@ -8,7 +8,7 @@ AstraShell 是一个面向个人运维和轻量服务器管理的桌面终端工
 ## 当前重点
 
 - 主线发布仓库：`origin -> git@github.com:getiid/AstraShell.git`
-- 当前桌面端版本：`0.3.13`
+- 当前桌面端版本：`0.3.14`
 - 公开更新源：GitHub Release
 - 当前对外文档入口：`README.md` + `docs/index.html`
 - 当前文档截图资源：`docs/screenshots/workspace-2026-03-26.svg`、`docs/screenshots/local-panel-2026-03-26.svg`
