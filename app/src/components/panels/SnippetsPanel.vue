@@ -1,8 +1,41 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, type ComponentPublicInstance } from 'vue'
 import { Pencil, Bell, Save, Trash2, Play, Server, FileTerminal } from 'lucide-vue-next'
+import { useSnippetCommandCompletion } from '../../composables/useSnippetCommandCompletion'
 
 const { vm } = defineProps<{ vm: any }>()
+
+const snippetCommandsModel = computed({
+  get: () => String(vm.snippetEdit.value.commands || ''),
+  set: (value: string) => {
+    vm.snippetEdit.value.commands = value
+  },
+})
+
+const snippetItemsModel = computed(() => vm.snippetItems?.value || [])
+const hostItemsModel = computed(() => vm.hostItems?.value || [])
+const selectedHostIdModel = computed(() => String(vm.snippetEdit.value.hostId || ''))
+
+const {
+  commandInputEl,
+  completionItems,
+  completionVisible,
+  activeCompletionIndex,
+  refreshCompletions,
+  applyCompletion,
+  handleCommandEditorKeydown,
+  handleCommandEditorInput,
+  handleCommandEditorBlur,
+} = useSnippetCommandCompletion({
+  model: snippetCommandsModel,
+  snippetItems: snippetItemsModel,
+  hostItems: hostItemsModel,
+  selectedHostId: selectedHostIdModel,
+})
+
+const bindCommandInputEl = (el: Element | ComponentPublicInstance | null) => {
+  commandInputEl.value = el instanceof HTMLTextAreaElement ? el : null
+}
 
 const snippetCategoryMenu = ref({
   visible: false,
@@ -188,14 +221,36 @@ onBeforeUnmount(() => {
               <div class="snippet-code-meta">
                 <span>{{ vm.snippetLineCount(vm.snippetEdit.value.commands) }} 行</span>
                 <span>{{ vm.snippetCommandLines(vm.snippetEdit.value.commands).length }} 条有效命令</span>
-                <span>按 Enter 分行，长命令不自动换行</span>
+                <span>Tab 采纳补全，↑↓ 切换候选，Esc 关闭</span>
+              </div>
+              <div v-if="completionVisible" class="snippet-completion-panel">
+                <div class="snippet-completion-head">智能补全</div>
+                <button
+                  v-for="(item, index) in completionItems"
+                  :key="item.key"
+                  class="snippet-completion-item"
+                  :class="{ active: activeCompletionIndex === index }"
+                  @mousedown.prevent="applyCompletion(item)"
+                >
+                  <span class="snippet-completion-main">
+                    <strong>{{ item.label }}</strong>
+                    <small>{{ item.detail }}</small>
+                  </span>
+                  <span class="snippet-completion-source">{{ item.source }}</span>
+                </button>
               </div>
               <textarea
+                :ref="bindCommandInputEl"
                 v-model="vm.snippetEdit.value.commands"
                 class="snippet-command-input"
                 placeholder="每行一条命令。以 # 开头会视为注释并跳过。"
                 spellcheck="false"
                 wrap="off"
+                @input="handleCommandEditorInput"
+                @keydown="handleCommandEditorKeydown"
+                @click="refreshCompletions"
+                @focus="refreshCompletions"
+                @blur="handleCommandEditorBlur"
                 @contextmenu.prevent="vm.openEditorContextMenu"
               ></textarea>
             </section>
