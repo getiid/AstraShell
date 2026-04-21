@@ -34,7 +34,7 @@ export function createSftpWorkspaceDnD(params: UseSftpWorkspaceParams, deps: Dnd
   }
 
   const onLocalDragStart = (item: any) => {
-    if (item?.isDir) return
+    if (!item?.path) return
     sftpDragLocalPath.value = item.path
   }
 

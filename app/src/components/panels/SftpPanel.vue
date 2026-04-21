@@ -179,7 +179,7 @@ const jumpRightPath = async () => {
               :key="vm.leftPanelMode.value === 'local' ? l.path : l.filename"
               class="sftp-file-row"
               :class="{ 'is-dir': l.isDir, active: vm.leftPanelMode.value === 'local' ? vm.selectedLocalFile.value === l.path : vm.selectedRemoteFile.value === l.filename }"
-              :draggable="vm.leftPanelMode.value === 'local' && !l.isDir"
+              :draggable="vm.leftPanelMode.value === 'local'"
               @click="vm.openLeftItem(l)"
               @dragstart="vm.onLeftDragStart(l)"
             >

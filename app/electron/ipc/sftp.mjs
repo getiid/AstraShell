@@ -15,6 +15,16 @@ import {
 export function registerSftpIpc(ipcMain, deps) {
   const { withSftp, broadcast } = deps
 
+  const joinRemotePath = (...parts) => {
+    const filtered = parts
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .map((item, index) => (index === 0 ? item : item.replace(/^\/+/, '')))
+    if (filtered.length === 0) return '.'
+    const joined = path.posix.join(...filtered)
+    return joined || '.'
+  }
+
   const resolveConflictPath = (filePath) => {
     if (!fs.existsSync(filePath)) return filePath
     const dir = path.dirname(filePath)
@@ -33,6 +43,160 @@ export function registerSftpIpc(ipcMain, deps) {
       resolve(stats || null)
     })
   })
+
+  const ensureRemoteDir = async (sftp, remoteDir) => {
+    const target = String(remoteDir || '.').trim()
+    if (!target || target === '.') return
+    const normalized = path.posix.normalize(target)
+    const segments = normalized.split('/').filter(Boolean)
+    const isAbsolute = normalized.startsWith('/')
+    let current = isAbsolute ? '/' : '.'
+    for (const segment of segments) {
+      current = current === '/' ? `/${segment}` : joinRemotePath(current, segment)
+      const existing = await getRemoteStat(sftp, current)
+      if (existing) continue
+      const created = await new Promise((resolve) => {
+        sftp.mkdir(current, {}, (err) => {
+          if (err) return resolve({ ok: false, error: err.message })
+          resolve({ ok: true })
+        })
+      })
+      if (!created.ok) throw new Error(created.error || `创建远程目录失败：${current}`)
+    }
+  }
+
+  const collectLocalTreeEntries = async (rootPath) => {
+    const rootName = path.basename(rootPath)
+    const directories = [{ relativePath: '', remoteDirName: rootName }]
+    const files = []
+
+    const walk = async (currentPath, relativePath) => {
+      const entries = await fs.promises.readdir(currentPath, { withFileTypes: true })
+      for (const entry of entries) {
+        const entryPath = path.join(currentPath, entry.name)
+        const nextRelativePath = relativePath ? path.join(relativePath, entry.name) : entry.name
+        if (entry.isDirectory()) {
+          directories.push({ relativePath: nextRelativePath, remoteDirName: entry.name })
+          await walk(entryPath, nextRelativePath)
+          continue
+        }
+        if (!entry.isFile()) continue
+        files.push({
+          localFile: entryPath,
+          relativePath: nextRelativePath,
+          remoteFileName: entry.name,
+        })
+      }
+    }
+
+    await walk(rootPath, '')
+    return { rootName, directories, files }
+  }
+
+  const uploadSingleFile = async (sftp, options) => {
+    const { localFile, remoteDir, remoteFileName, conflictPolicy, resume } = options
+    const remoteFile = joinRemotePath(remoteDir || '.', remoteFileName || path.basename(localFile))
+    const resolvedConflictPolicy = conflictPolicy || (resume ? 'resume' : 'overwrite')
+    const remoteStat = await getRemoteStat(sftp, remoteFile)
+    const remoteSize = Number(remoteStat?.size || 0)
+
+    if (remoteStat) {
+      if (resolvedConflictPolicy === 'skip') return { ok: true, skipped: true, localFile, remoteFile }
+      if (resolvedConflictPolicy === 'rename') {
+        const ext = path.extname(remoteFile)
+        const base = path.basename(remoteFile, ext)
+        const dir = path.posix.dirname(remoteFile)
+        let candidate = remoteFile
+        for (let i = 1; i < 9999; i += 1) {
+          candidate = `${dir === '.' ? '' : dir + '/'}${base} (${i})${ext}`
+          const exists = await getRemoteStat(sftp, candidate)
+          if (!exists) break
+        }
+        return streamUploadWithResume(sftp, localFile, candidate, 0)
+      }
+    }
+
+    if (resolvedConflictPolicy === 'resume' && remoteSize > 0) {
+      return streamUploadWithResume(sftp, localFile, remoteFile, remoteSize)
+    }
+
+    return await new Promise((resolve) => {
+      sftp.fastPut(
+        localFile,
+        remoteFile,
+        {
+          step: (totalTransferred, _chunk, total) => {
+            const percent = total > 0 ? Math.min(100, Math.floor((totalTransferred / total) * 100)) : 0
+            broadcast('sftp:progress', { type: 'upload', percent, transferred: totalTransferred, total })
+          },
+        },
+        (err) => {
+          if (err) return resolve({ ok: false, error: err.message })
+          broadcast('sftp:progress', { type: 'upload', percent: 100, done: true })
+          resolve({ ok: true, localFile, remoteFile })
+        },
+      )
+    })
+  }
+
+  const uploadDirectory = async (sftp, localDir, options = {}) => {
+    const tree = await collectLocalTreeEntries(localDir)
+    const conflictPolicy = options.conflictPolicy || (options.resume ? 'resume' : 'overwrite')
+    let rootRemoteDir = joinRemotePath(options.remoteDir || '.', tree.rootName)
+    const rootRemoteStat = await getRemoteStat(sftp, rootRemoteDir)
+
+    if (rootRemoteStat) {
+      if (conflictPolicy === 'skip') {
+        return { ok: true, skipped: true, localFile: localDir, remoteDir: rootRemoteDir, folderMode: true }
+      }
+      if (conflictPolicy === 'rename') {
+        const parentDir = path.posix.dirname(rootRemoteDir)
+        const baseName = path.posix.basename(rootRemoteDir)
+        for (let i = 1; i < 9999; i += 1) {
+          const candidate = joinRemotePath(parentDir === '.' ? '' : parentDir, `${baseName} (${i})`)
+          const exists = await getRemoteStat(sftp, candidate)
+          if (exists) continue
+          rootRemoteDir = candidate
+          break
+        }
+      }
+    }
+
+    await ensureRemoteDir(sftp, rootRemoteDir)
+
+    for (const directory of tree.directories) {
+      const currentRemoteDir = directory.relativePath
+        ? joinRemotePath(rootRemoteDir, directory.relativePath)
+        : rootRemoteDir
+      await ensureRemoteDir(sftp, currentRemoteDir)
+    }
+
+    let lastRemoteFile = rootRemoteDir
+    for (const file of tree.files) {
+      const relativeDir = path.dirname(file.relativePath)
+      const nextRemoteDir = relativeDir === '.' ? rootRemoteDir : joinRemotePath(rootRemoteDir, relativeDir)
+      const result = await uploadSingleFile(sftp, {
+        localFile: file.localFile,
+        remoteDir: nextRemoteDir,
+        remoteFileName: file.remoteFileName,
+        conflictPolicy,
+        resume: options.resume,
+      })
+      if (!result.ok) return result
+      lastRemoteFile = result.remoteFile || lastRemoteFile
+    }
+
+    return {
+      ok: true,
+      localFile: localDir,
+      remoteFile: lastRemoteFile,
+      remoteDir: rootRemoteDir,
+      uploadedFiles: tree.files.length,
+      uploadedDirs: tree.directories.length,
+      folderMode: true,
+      empty: tree.files.length === 0,
+    }
+  }
 
   const streamDownloadWithResume = (sftp, remoteFile, localFile, resumeEnabled) => new Promise((resolve) => {
     const localSize = resumeEnabled && fs.existsSync(localFile) ? Number(fs.statSync(localFile)?.size || 0) : 0
@@ -224,51 +388,27 @@ export function registerSftpIpc(ipcMain, deps) {
       let localFile = validatedPayload.localFile
       if (!localFile) {
         const win = BrowserWindow.getFocusedWindow()
-        const pick = await dialog.showOpenDialog(win, { title: '选择本地文件上传', properties: ['openFile'] })
+        const pick = await dialog.showOpenDialog(win, {
+          title: '选择本地文件或文件夹上传',
+          properties: ['openFile', 'openDirectory'],
+        })
         if (pick.canceled || !pick.filePaths?.[0]) return { ok: false, error: '已取消' }
         localFile = pick.filePaths[0]
       }
-      const remoteFile = `${validatedPayload.remoteDir || '.'}/${validatedPayload.remoteFileName || path.basename(localFile)}`
-      const conflictPolicy = validatedPayload.conflictPolicy || (validatedPayload.resume ? 'resume' : 'overwrite')
-      const remoteStat = await getRemoteStat(sftp, remoteFile)
-      const remoteSize = Number(remoteStat?.size || 0)
-
-      if (remoteStat) {
-        if (conflictPolicy === 'skip') return { ok: true, skipped: true, localFile, remoteFile }
-        if (conflictPolicy === 'rename') {
-          const ext = path.extname(remoteFile)
-          const base = path.basename(remoteFile, ext)
-          const dir = path.posix.dirname(remoteFile)
-          let candidate = remoteFile
-          for (let i = 1; i < 9999; i += 1) {
-            candidate = `${dir === '.' ? '' : dir + '/'}${base} (${i})${ext}`
-            const exists = await getRemoteStat(sftp, candidate)
-            if (!exists) break
-          }
-          return streamUploadWithResume(sftp, localFile, candidate, 0)
-        }
+      const localStat = await fs.promises.stat(localFile)
+      if (localStat.isDirectory()) {
+        return uploadDirectory(sftp, localFile, {
+          remoteDir: validatedPayload.remoteDir,
+          conflictPolicy: validatedPayload.conflictPolicy,
+          resume: validatedPayload.resume,
+        })
       }
-
-      if (conflictPolicy === 'resume' && remoteSize > 0) {
-        return streamUploadWithResume(sftp, localFile, remoteFile, remoteSize)
-      }
-
-      return await new Promise((resolve) => {
-        sftp.fastPut(
-          localFile,
-          remoteFile,
-          {
-            step: (totalTransferred, _chunk, total) => {
-              const percent = total > 0 ? Math.min(100, Math.floor((totalTransferred / total) * 100)) : 0
-              broadcast('sftp:progress', { type: 'upload', percent, transferred: totalTransferred, total })
-            },
-          },
-          (err) => {
-            if (err) return resolve({ ok: false, error: err.message })
-            broadcast('sftp:progress', { type: 'upload', percent: 100, done: true })
-            resolve({ ok: true, localFile, remoteFile })
-          },
-        )
+      return uploadSingleFile(sftp, {
+        localFile,
+        remoteDir: validatedPayload.remoteDir,
+        remoteFileName: validatedPayload.remoteFileName,
+        conflictPolicy: validatedPayload.conflictPolicy,
+        resume: validatedPayload.resume,
       })
     })
   })

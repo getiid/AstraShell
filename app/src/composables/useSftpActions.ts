@@ -54,7 +54,13 @@ export function useSftpActions(params: {
     }
     sftpUploadProgress.value = 0
     const res = await window.lightterm.sftpUpload({ ...config, remoteDir: sftpPath.value, localFile: selectedLocalFile.value || undefined, conflictPolicy: 'resume', resume: true })
-    sftpStatus.value = res.ok ? `上传成功：${res.remoteFile}` : `上传失败：${res.error}`
+    if (res.ok) {
+      sftpStatus.value = res.folderMode
+        ? `目录上传完成：${res.remoteDir}（${res.uploadedDirs || 0} 个目录，${res.uploadedFiles || 0} 个文件）`
+        : `上传成功：${res.remoteFile}`
+    } else {
+      sftpStatus.value = `上传失败：${res.error}`
+    }
     if (res.ok) await loadSftp()
   }
 
