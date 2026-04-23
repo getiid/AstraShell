@@ -1,7 +1,7 @@
 {
   "name": "astrashell-desktop",
   "private": true,
-  "version": "0.3.15",
+  "version": "0.3.16",
   "description": "AstraShell desktop terminal for SSH, SFTP, snippets, serial tools and key vault.",
   "author": "Jonny",
   "type": "module",
