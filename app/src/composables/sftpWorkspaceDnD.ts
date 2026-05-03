@@ -15,7 +15,9 @@ export function createSftpWorkspaceDnD(params: UseSftpWorkspaceParams, deps: Dnd
     isWindowsClient,
     localPath,
     selectedLocalFile,
+    selectedLocalFiles,
     selectedRemoteFile,
+    selectedRemoteFiles,
     sftpPath,
     sftpStatus,
     sftpDragLocalPath,
@@ -35,6 +37,10 @@ export function createSftpWorkspaceDnD(params: UseSftpWorkspaceParams, deps: Dnd
 
   const onLocalDragStart = (item: any) => {
     if (!item?.path) return
+    if (!selectedLocalFiles.value.includes(item.path)) {
+      selectedLocalFiles.value = [item.path]
+    }
+    selectedLocalFile.value = item.path
     sftpDragLocalPath.value = item.path
   }
 
@@ -107,6 +113,9 @@ export function createSftpWorkspaceDnD(params: UseSftpWorkspaceParams, deps: Dnd
   const showRemoteMenu = (event: MouseEvent, item: any) => {
     event.preventDefault()
     selectedRemoteFile.value = item.filename
+    if (!selectedRemoteFiles.value.includes(item.filename)) {
+      selectedRemoteFiles.value = [item.filename]
+    }
     remoteMenu.value = { visible: true, x: event.clientX, y: event.clientY, filename: item.filename }
   }
 

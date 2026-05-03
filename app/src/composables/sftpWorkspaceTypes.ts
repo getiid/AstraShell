@@ -21,6 +21,10 @@ export type UseSftpWorkspaceParams = {
   rightLocalFsLoaded: Ref<boolean>
   selectedLocalFile: Ref<string>
   selectedRemoteFile: Ref<string>
+  selectedLocalFiles: Ref<string[]>
+  selectedRemoteFiles: Ref<string[]>
+  leftSelectedKeys: Ref<string[]>
+  rightSelectedKeys: Ref<string[]>
   sftpPath: Ref<string>
   sftpRows: Ref<any[]>
   sftpStatus: Ref<string>

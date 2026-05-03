@@ -15,6 +15,10 @@ export function useSftpPanels() {
   const sftpUploadProgress = ref(0)
   const sftpDownloadProgress = ref(0)
   const selectedRemoteFile = ref('')
+  const selectedRemoteFiles = ref<string[]>([])
+  const selectedLocalFiles = ref<string[]>([])
+  const leftSelectedKeys = ref<string[]>([])
+  const rightSelectedKeys = ref<string[]>([])
   const sftpNewDirName = ref('')
   const sftpRenameTo = ref('')
   const remoteMenu = ref({ visible: false, x: 0, y: 0, filename: '' })
@@ -51,6 +55,10 @@ export function useSftpPanels() {
     sftpUploadProgress,
     sftpDownloadProgress,
     selectedRemoteFile,
+    selectedRemoteFiles,
+    selectedLocalFiles,
+    leftSelectedKeys,
+    rightSelectedKeys,
     sftpNewDirName,
     sftpRenameTo,
     remoteMenu,

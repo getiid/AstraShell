@@ -12,6 +12,10 @@ export function createSftpWorkspaceLoaders(params: UseSftpWorkspaceParams) {
     rightLocalFsLoaded,
     selectedLocalFile,
     selectedRemoteFile,
+    selectedLocalFiles,
+    selectedRemoteFiles,
+    leftSelectedKeys,
+    rightSelectedKeys,
     sftpPath,
     sftpRows,
     sftpStatus,
@@ -102,8 +106,10 @@ export function createSftpWorkspaceLoaders(params: UseSftpWorkspaceParams) {
     sftpStatus,
     rightPanelMode,
     selectedLocalFile,
+    selectedLocalFiles,
     sftpUploadProgress,
     selectedRemoteFile,
+    selectedRemoteFiles,
     sftpDownloadProgress,
     sftpNewDirName,
     sftpRenameTo,
@@ -143,6 +149,49 @@ export function createSftpWorkspaceLoaders(params: UseSftpWorkspaceParams) {
     rightConnectCategory.value = allCategory
     rightConnectKeyword.value = ''
     rightConnectTarget.value = rightPanelMode.value === 'local' ? 'local' : sftpHostId.value
+  }
+
+  const selectLeftConnectTarget = (target: string) => {
+    leftConnectTarget.value = target
+  }
+
+  const selectRightConnectTarget = (target: string) => {
+    rightConnectTarget.value = target
+  }
+
+  const syncSelectedPayloads = () => {
+    const localSelections = new Set<string>()
+    const remoteSelections = new Set<string>()
+    if (leftPanelMode.value === 'local') {
+      leftSelectedKeys.value.forEach((key) => localSelections.add(key))
+    } else {
+      leftSelectedKeys.value.forEach((key) => remoteSelections.add(key))
+    }
+    if (rightPanelMode.value === 'local') {
+      rightSelectedKeys.value.forEach((key) => localSelections.add(key))
+    } else {
+      rightSelectedKeys.value.forEach((key) => remoteSelections.add(key))
+    }
+    selectedLocalFiles.value = [...localSelections]
+    selectedRemoteFiles.value = [...remoteSelections]
+    selectedLocalFile.value = selectedLocalFiles.value[selectedLocalFiles.value.length - 1] || ''
+    selectedRemoteFile.value = selectedRemoteFiles.value[selectedRemoteFiles.value.length - 1] || ''
+  }
+
+  const setLeftSelectedKeys = (keys: string[]) => {
+    leftSelectedKeys.value = [...new Set(keys.filter(Boolean))]
+    syncSelectedPayloads()
+  }
+
+  const setRightSelectedKeys = (keys: string[]) => {
+    rightSelectedKeys.value = [...new Set(keys.filter(Boolean))]
+    syncSelectedPayloads()
+  }
+
+  const clearFileSelections = () => {
+    leftSelectedKeys.value = []
+    rightSelectedKeys.value = []
+    syncSelectedPayloads()
   }
 
   const connectLeftPanel = async () => {
@@ -198,6 +247,11 @@ export function createSftpWorkspaceLoaders(params: UseSftpWorkspaceParams) {
     loadLeftSftp,
     toggleLeftConnectPanel,
     toggleRightConnectPanel,
+    selectLeftConnectTarget,
+    selectRightConnectTarget,
+    setLeftSelectedKeys,
+    setRightSelectedKeys,
+    clearFileSelections,
     connectLeftPanel,
     connectSftp,
   }

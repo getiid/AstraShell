@@ -6,8 +6,10 @@ export function useSftpActions(params: {
   sftpStatus: Ref<string>
   rightPanelMode: Ref<'remote' | 'local'>
   selectedLocalFile: Ref<string>
+  selectedLocalFiles: Ref<string[]>
   sftpUploadProgress: Ref<number>
   selectedRemoteFile: Ref<string>
+  selectedRemoteFiles: Ref<string[]>
   sftpDownloadProgress: Ref<number>
   sftpNewDirName: Ref<string>
   sftpRenameTo: Ref<string>
@@ -20,8 +22,10 @@ export function useSftpActions(params: {
     sftpStatus,
     rightPanelMode,
     selectedLocalFile,
+    selectedLocalFiles,
     sftpUploadProgress,
     selectedRemoteFile,
+    selectedRemoteFiles,
     sftpDownloadProgress,
     sftpNewDirName,
     sftpRenameTo,
@@ -53,15 +57,27 @@ export function useSftpActions(params: {
       return
     }
     sftpUploadProgress.value = 0
-    const res = await window.lightterm.sftpUpload({ ...config, remoteDir: sftpPath.value, localFile: selectedLocalFile.value || undefined, conflictPolicy: 'resume', resume: true })
-    if (res.ok) {
-      sftpStatus.value = res.folderMode
-        ? `目录上传完成：${res.remoteDir}（${res.uploadedDirs || 0} 个目录，${res.uploadedFiles || 0} 个文件）`
-        : `上传成功：${res.remoteFile}`
-    } else {
-      sftpStatus.value = `上传失败：${res.error}`
+    const targets = selectedLocalFiles.value.length ? selectedLocalFiles.value : [selectedLocalFile.value].filter(Boolean)
+    const results = []
+    for (const localFile of targets) {
+      const res = await window.lightterm.sftpUpload({ ...config, remoteDir: sftpPath.value, localFile: localFile || undefined, conflictPolicy: 'resume', resume: true })
+      results.push(res)
+      if (!res.ok) {
+        sftpStatus.value = `上传失败：${res.error}`
+        break
+      }
     }
-    if (res.ok) await loadSftp()
+    const failed = results.find((item) => !item.ok)
+    if (!failed) {
+      const uploadedCount = results.length
+      const last = results[results.length - 1]
+      sftpStatus.value = uploadedCount > 1
+        ? `上传完成：${uploadedCount} 项`
+        : last?.folderMode
+          ? `目录上传完成：${last.remoteDir}（${last.uploadedDirs || 0} 个目录，${last.uploadedFiles || 0} 个文件）`
+          : `上传成功：${last?.remoteFile || '已完成'}`
+    }
+    if (!failed) await loadSftp()
   }
 
   const downloadSftp = async () => {
@@ -72,6 +88,10 @@ export function useSftpActions(params: {
     }
     if (!selectedRemoteFile.value) {
       sftpStatus.value = '请先在列表中选择远程文件'
+      return
+    }
+    if (selectedRemoteFiles.value.length > 1) {
+      sftpStatus.value = '已多选远程项目；请右键单个文件下载，文件夹下载稍后支持'
       return
     }
     sftpDownloadProgress.value = 0

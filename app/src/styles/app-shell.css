@@ -344,22 +344,45 @@ input::selection { background: #bfdbfe; color: #0f172a; }
 .sftp-path-label { flex-shrink: 0; font-size: 10px; font-weight: 700; color: #475569; letter-spacing: 0.03em; text-transform: uppercase; }
 .sftp-path-input input { width: 100%; min-width: 0; border: none; background: transparent; padding: 7px 0; font-size: 11px; color: #0f172a; font-weight: 600; }
 .sftp-path-input input:focus { outline: none; }
-.sftp-connect-card { padding: 8px; border-radius: 10px; border: 1px solid #dbe3ee; background: linear-gradient(180deg, #f8fbff 0%, #f2f7fd 100%); display: grid; gap: 8px; }
-.sftp-connect-card.accent { border-color: #cddcf2; background: linear-gradient(180deg, #f8fbff 0%, #edf3ff 100%); }
-.sftp-connect-head { display: grid; gap: 2px; }
-.sftp-connect-head strong { color: #0f172a; font-size: 12px; }
+.sftp-connect-card { padding: 9px; border-radius: 14px; border: 1px solid #cfddeb; background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(240,246,252,0.98) 100%); display: grid; gap: 8px; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.84); }
+.sftp-connect-card.accent { border-color: #c5d8f0; background: linear-gradient(180deg, rgba(255,255,255,0.97) 0%, rgba(235,243,255,0.98) 100%); }
+.sftp-connect-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sftp-connect-head > div { min-width: 0; display: grid; gap: 2px; }
+.sftp-connect-head strong { color: #0f172a; font-size: 12px; line-height: 1.15; }
 .sftp-connect-head span { color: #64748b; font-size: 11px; }
-.connect-inline.sftp-connect-inline { margin-top: 0; border: none; background: transparent; padding: 0; }
-.connect-inline.sftp-connect-inline > button { height: 32px; }
+.sftp-connect-count { flex-shrink: 0; display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; border: 1px solid #d5e0ec; background: rgba(255,255,255,0.86); color: #2563eb !important; font-size: 10px !important; font-weight: 800; }
+.sftp-connect-tools { display: grid; gap: 7px; }
 .connect-filters { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 8px; min-width: 0; }
 .connect-filters input,
 .connect-filters select,
 .connect-inline > select { width: 100%; min-width: 0; background: #fff; }
+.connect-filters input,
+.connect-filters select { border-radius: 10px; border-color: #d8e2ec; font-size: 11px; }
+.sftp-connect-options { max-height: 218px; overflow: auto; display: grid; gap: 6px; padding-right: 2px; }
+.sftp-connect-group-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 4px 0; color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.sftp-connect-group-title small { min-width: 18px; height: 18px; border-radius: 999px; background: #e8eef6; color: #334155; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; }
+.sftp-connect-option { width: 100%; min-width: 0; min-height: 44px; margin: 0; padding: 6px 7px; border-radius: 11px; border: 1px solid #d9e4ef; background: rgba(255,255,255,0.88); color: #0f172a; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px; text-align: left; box-shadow: none; transition: background .18s ease, border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
+.sftp-connect-option:hover { border-color: #9fc4f5; background: #f7fbff; transform: translateY(-1px); box-shadow: 0 6px 14px rgba(37, 99, 235, 0.08); }
+.sftp-connect-option.selected { border-color: #3b82f6; background: linear-gradient(180deg, #eef6ff 0%, #e1efff 100%); box-shadow: inset 0 0 0 1px rgba(59,130,246,.16); }
+.sftp-connect-option.local { grid-template-columns: auto minmax(0, 1fr) auto; }
+.sftp-connect-option-icon { width: 27px; height: 27px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; color: #1d4ed8; background: linear-gradient(180deg, #dbeafe 0%, #cfe3ff 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,0.7); }
+.sftp-connect-option-icon.local { color: #0369a1; background: linear-gradient(180deg, #e0f2fe 0%, #c7eafe 100%); }
+.sftp-connect-option-copy { min-width: 0; display: grid; gap: 2px; }
+.sftp-connect-option-copy strong { min-width: 0; color: #0f172a; font-size: 11px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sftp-connect-option-copy small { min-width: 0; color: #64748b; font-size: 10px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sftp-connect-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; color: #475569; font-size: 10px; font-weight: 700; }
+.sftp-connect-meta span { display: inline-flex; align-items: center; gap: 3px; min-height: 20px; padding: 0 6px; border-radius: 999px; border: 1px solid #d9e3ee; background: rgba(248,250,252,0.94); white-space: nowrap; }
+.sftp-connect-check { width: 22px; height: 22px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: transparent; border: 1px solid #d7e1ec; background: rgba(255,255,255,0.72); }
+.sftp-connect-option.selected .sftp-connect-check { color: #fff; border-color: #2563eb; background: #2563eb; }
+.sftp-connect-empty { min-height: 54px; border: 1px dashed #cbd5e1; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 11px; background: rgba(248,250,252,0.72); }
+.sftp-connect-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding-top: 1px; }
+.sftp-connect-footer span { min-width: 0; color: #64748b; font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sftp-connect-footer button { margin: 0; min-height: 30px; border-radius: 10px; padding: 6px 10px; white-space: nowrap; }
 .sftp-search { width: 100%; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 10px; border: 1px solid #d8e2ec; background: #ffffff; color: #64748b; }
 .sftp-search.compact { min-width: 0; }
 .sftp-search input { width: 100%; min-width: 0; border: none; background: transparent; padding: 7px 0; font-size: 12px; }
 .sftp-search input:focus { outline: none; }
-.sftp-file-list { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 5px; padding-right: 2px; }
+.sftp-file-list { position: relative; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 5px; padding-right: 2px; user-select: none; }
 .sftp-file-header,
 .sftp-file-row { display: grid; grid-template-columns: minmax(0, 2.22fr) minmax(108px, 0.78fr) minmax(56px, 0.3fr) minmax(46px, 0.24fr); align-items: center; gap: 6px; }
 .sftp-file-header { position: sticky; top: 0; z-index: 2; padding: 2px 6px 4px; background: linear-gradient(180deg, rgba(248,250,252,0.98) 0%, rgba(248,250,252,0.92) 100%); border-bottom: 1px solid rgba(203,213,225,.9); }
@@ -376,6 +399,8 @@ input::selection { background: #bfdbfe; color: #0f172a; }
 .sftp-file-row:hover { background: #f6f9ff; border-color: #bfd5f5; transform: translateY(-1px); }
 .sftp-file-row.is-dir { background: linear-gradient(180deg, rgba(219,234,254,0.55) 0%, rgba(239,246,255,0.82) 100%); border-color: #c9dcfb; }
 .sftp-file-row.active { border-color: #3b82f6; box-shadow: inset 0 0 0 1px rgba(59,130,246,.18); background: linear-gradient(180deg, #eef5ff 0%, #e4efff 100%); }
+.sftp-file-row.active .sftp-file-icon { background: #dbeafe; color: #1d4ed8; }
+.sftp-selection-box { position: absolute; z-index: 8; pointer-events: none; border: 1px solid #2563eb; background: rgba(37, 99, 235, 0.14); border-radius: 6px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35); }
 .sftp-file-main { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .sftp-file-icon { width: 20px; height: 20px; border-radius: 6px; background: #eff4fb; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
 .sftp-file-main.name { grid-column: 1; }
