@@ -3168,22 +3168,12 @@ ipcMain.handle('vault:status', async () => {
   }
 })
 
-ipcMain.handle('vault:set-master', async (_event, payload) => {
-  try {
-    return { ok: true, message: '当前版本本地数据库固定为明文模式，无需设置主密码' }
-  } catch (e) {
-    logMain(`vault:set-master error: ${e?.message || e}`)
-    return { ok: false, error: `初始化失败：${e?.message || e}` }
-  }
+ipcMain.handle('vault:set-master', async () => {
+  return { ok: true, message: '当前版本本地数据库固定为明文模式，无需设置主密码' }
 })
 
-ipcMain.handle('vault:unlock', async (_event, payload) => {
-  try {
-    return { ok: true, message: '当前版本本地数据库固定为明文模式，无需解锁' }
-  } catch (e) {
-    logMain(`vault:unlock error: ${e?.message || e}`)
-    return { ok: false, error: `解锁失败：${e?.message || e}` }
-  }
+ipcMain.handle('vault:unlock', async () => {
+  return { ok: true, message: '当前版本本地数据库固定为明文模式，无需解锁' }
 })
 
 ipcMain.handle('vault:reset', async () => {

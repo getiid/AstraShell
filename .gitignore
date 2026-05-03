@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# local IDE settings
+.idea/
+
 # app build artifacts
 app/node_modules/
 app/dist/

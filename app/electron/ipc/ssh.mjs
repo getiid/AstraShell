@@ -144,9 +144,7 @@ function runStandaloneSshScript({
   connectConfigFromPayload,
   payload,
 }) {
-  return new Promise(async (resolve) => {
-    const conn = await createSSHClient()
-    attachKeyboardHandler(conn, payload.password)
+  return createSSHClient().then((conn) => new Promise((resolve) => {
     let settled = false
     let timer = null
     const finish = (value) => {
@@ -157,6 +155,7 @@ function runStandaloneSshScript({
       resolve(value)
     }
 
+    attachKeyboardHandler(conn, payload.password)
     timer = setTimeout(() => {
       finish({ ok: false, error: '脚本执行超时' })
     }, Number(payload.timeoutMs || 120000))
@@ -195,7 +194,7 @@ function runStandaloneSshScript({
     }).on('error', (err) => {
       finish({ ok: false, error: err?.message || 'SSH 连接失败' })
     }).connect(connectConfigFromPayload(payload))
-  })
+  }))
 }
 
 export function registerSshIpc(ipcMain, deps) {
