@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('lightterm', {
   appGetStorage: () => ipcRenderer.invoke('app:get-storage'),
+  appGetNetworkRoute: () => ipcRenderer.invoke('app:get-network-route'),
   appGetStorageMeta: () => ipcRenderer.invoke('app:get-storage-meta'),
   appRefreshStorageData: () => ipcRenderer.invoke('app:refresh-storage-data'),
   appPickStorageFolder: () => ipcRenderer.invoke('app:pick-storage-folder'),
@@ -90,6 +91,7 @@ contextBridge.exposeInMainWorld('lightterm', {
   sshConnect: (config) => ipcRenderer.invoke('ssh:connect', config),
   sshExecScript: (payload) => ipcRenderer.invoke('ssh:exec-script', payload),
   sshMetrics: (payload) => ipcRenderer.invoke('ssh:metrics', payload),
+  sshInspectPath: (payload) => ipcRenderer.invoke('ssh:inspect-path', payload),
   sshWrite: (payload) => ipcRenderer.invoke('ssh:write', payload),
   sshResize: (payload) => ipcRenderer.invoke('ssh:resize', payload),
   sshDisconnect: (payload) => ipcRenderer.invoke('ssh:disconnect', payload),

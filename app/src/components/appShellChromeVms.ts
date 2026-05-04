@@ -17,10 +17,30 @@ export function buildAppShellChromeVms(parts: Record<string, any>) {
     return parts.sshStatus.value || '就绪'
   })
 
+  const navCounts = computed(() => ({
+    hosts: parts.hostItems?.value?.length ?? 0,
+    sftp: parts.sshTabs?.value?.filter((item: any) => item.connected).length ?? 0,
+    local: parts.localTabs?.value?.length ?? 0,
+    database: parts.databaseMetrics?.value?.total ?? 0,
+    serial: parts.serialConnected?.value ? 1 : 0,
+    snippets: parts.snippetItems?.value?.length ?? 0,
+    vault: parts.vaultItems?.value?.length ?? 0,
+    settings: null,
+    logs: parts.auditTargetGroups?.value?.length ?? 0,
+  }))
+
+  const versionLabel = computed(() => {
+    const current = String(parts.updateInfo?.value?.currentVersion || '').trim()
+    return current ? `v${current}` : 'v0.3.20'
+  })
+
   return {
     sidebarVm: {
       nav: parts.nav,
       selectNav: parts.selectNav,
+      navCounts,
+      footerStatus: '所有服务运行正常',
+      versionLabel,
     },
     textContextMenuVm: {
       textMenu: parts.textMenu,

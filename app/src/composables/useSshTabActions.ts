@@ -40,6 +40,7 @@ export function useSshTabActions(params: {
     const tab = sshTabs.value.find((item) => item.id === sessionId)
     if (!tab) return
     activeTerminalMode.value = 'ssh'
+    focusTerminal.value = true
     sshSessionId.value = tab.id
     sshConnected.value = !!tab.connected
     ensureSshBuffer(tab.id)

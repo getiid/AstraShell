@@ -21,6 +21,7 @@ export function createAppShellTerminalRuntimeBridge() {
     resetTerminal: () => {},
     writeTerminal: (_text: string) => {},
     writeTerminalLine: (_text: string) => {},
+    sendTerminalCommand: async (_command: string) => {},
     fitTerminal: () => {},
     getTerminalSize: () => ({ cols: 0, rows: 0 }),
   }
@@ -44,6 +45,7 @@ export function createAppShellTerminalRuntimeBridge() {
     resetTerminal: typeof bridge.resetTerminal
     writeTerminal: typeof bridge.writeTerminal
     writeTerminalLine: typeof bridge.writeTerminalLine
+    sendTerminalCommand: typeof bridge.sendTerminalCommand
     fitTerminal: typeof bridge.fitTerminal
     getTerminalSize: typeof bridge.getTerminalSize
   }) => {
@@ -65,6 +67,7 @@ export function createAppShellTerminalRuntimeBridge() {
     bridge.resetTerminal = runtime.resetTerminal
     bridge.writeTerminal = runtime.writeTerminal
     bridge.writeTerminalLine = runtime.writeTerminalLine
+    bridge.sendTerminalCommand = runtime.sendTerminalCommand
     bridge.fitTerminal = runtime.fitTerminal
     bridge.getTerminalSize = runtime.getTerminalSize
   }

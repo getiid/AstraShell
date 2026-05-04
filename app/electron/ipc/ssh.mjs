@@ -1,14 +1,43 @@
-import { remoteConnSchema, safeParse, sshConnectSchema, sshExecScriptSchema, sshResizeSchema, sshSessionIdSchema, sshWriteSchema } from './schemas.mjs'
+import { remoteConnSchema, safeParse, sshConnectSchema, sshExecScriptSchema, sshInspectPathSchema, sshResizeSchema, sshSessionIdSchema, sshWriteSchema } from './schemas.mjs'
 
 const SSH_METRICS_COMMAND = `LC_ALL=C sh -lc '
+host=$(hostname 2>/dev/null | head -n 1)
+user=$(id -un 2>/dev/null || whoami 2>/dev/null)
+cwd=$(pwd 2>/dev/null)
+kernel=$(uname -srmo 2>/dev/null | head -n 1)
+os=$(awk -F= "/^PRETTY_NAME=/{gsub(/^\\"|\\"$/, \\"\\", \\$2); print \\$2; exit}" /etc/os-release 2>/dev/null)
+shell_name=$(printf "%s" "\${SHELL:-}" | awk -F"/" "{print \\$NF}")
+uptime_text=$(uptime -p 2>/dev/null | sed "s/^up //" )
+load=$(awk "{print \\$1, \\$2, \\$3}" /proc/loadavg 2>/dev/null)
 cpu1=$(awk "/^cpu /{idle=\\$5+\\$6; total=0; for(i=2;i<=NF;i++) total+=\\$i; print total, idle; exit}" /proc/stat 2>/dev/null)
 sleep 0.2
 cpu2=$(awk "/^cpu /{idle=\\$5+\\$6; total=0; for(i=2;i<=NF;i++) total+=\\$i; print total, idle; exit}" /proc/stat 2>/dev/null)
 mem=$(awk "/^MemTotal:/{t=\\$2} /^MemAvailable:/{a=\\$2} END{print t+0, a+0}" /proc/meminfo 2>/dev/null)
 disk=$(df -kP / 2>/dev/null | awk "NR==2 {gsub(/%/, \\"\\", \\$5); print \\$2+0, \\$3+0, \\$5+0}")
 net=$(awk -F "[: ]+" "BEGIN{rx=0;tx=0} NR>2 && \\$1 != \\"lo\\" {rx+=\\$3; tx+=\\$11} END{print rx+0, tx+0}" /proc/net/dev 2>/dev/null)
-printf "cpu1=%s\\ncpu2=%s\\nmem=%s\\ndisk=%s\\nnet=%s\\n" "$cpu1" "$cpu2" "$mem" "$disk" "$net"
+printf "host=%s\\nuser=%s\\ncwd=%s\\nkernel=%s\\nos=%s\\nshell=%s\\nuptime=%s\\nload=%s\\ncpu1=%s\\ncpu2=%s\\nmem=%s\\ndisk=%s\\nnet=%s\\n" "$host" "$user" "$cwd" "$kernel" "$os" "$shell_name" "$uptime_text" "$load" "$cpu1" "$cpu2" "$mem" "$disk" "$net"
 '`
+
+function shellSingleQuote(value) {
+  return `'${String(value || '').replace(/'/g, `'"'"'`)}'`
+}
+
+function buildInspectPathCommand(pathValue) {
+  const escapedPath = shellSingleQuote(pathValue || '.')
+  return `LC_ALL=C sh -lc '
+target=${escapedPath}
+cd -- "$target" 2>/dev/null || exit 9
+cwd=$(pwd -P 2>/dev/null || pwd 2>/dev/null)
+dirs=$(find . -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | awk "{print \\$1}")
+files=$(find . -mindepth 1 -maxdepth 1 -type f 2>/dev/null | wc -l | awk "{print \\$1}")
+total=$(find . -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | awk "{print \\$1}")
+size=$(du -sh . 2>/dev/null | awk "{print \\$1}")
+printf "cwd=%s\\ndirs=%s\\nfiles=%s\\ntotal=%s\\nsize=%s\\n" "$cwd" "$dirs" "$files" "$total" "$size"
+find . -mindepth 1 -maxdepth 1 -printf "%y\\t%f\\n" 2>/dev/null | sort | head -n 8 | while IFS="$(printf "\\t")" read -r kind name; do
+  printf "item=%s\\t%s\\n" "$kind" "$name"
+done
+'`
+}
 
 function normalizeSshErrorMessage(error) {
   const message = String(error?.message || error || 'SSH 连接失败').trim() || 'SSH 连接失败'
@@ -126,6 +155,14 @@ function parseServerMetricOutput(rawText) {
 
   return {
     supported: !!(cpuTotal1 || cpuTotal2 || memTotalKb || diskTotalKb || rxBytes || txBytes),
+    host: String(rows.host || '').trim(),
+    user: String(rows.user || '').trim(),
+    cwd: String(rows.cwd || '').trim(),
+    kernel: String(rows.kernel || '').trim(),
+    os: String(rows.os || '').trim(),
+    shell: String(rows.shell || '').trim(),
+    uptime: String(rows.uptime || '').trim(),
+    loadAverage: String(rows.load || '').trim(),
     cpuPercent,
     memoryPercent,
     diskPercent,
@@ -136,6 +173,42 @@ function parseServerMetricOutput(rawText) {
     rxBytes,
     txBytes,
   }
+}
+
+function parseInspectPathOutput(rawText) {
+  const snapshot = {
+    cwd: '',
+    dirs: 0,
+    files: 0,
+    total: 0,
+    size: '--',
+    items: [],
+  }
+  String(rawText || '')
+    .split(/\r?\n/)
+    .forEach((line) => {
+      const value = String(line || '')
+      if (!value) return
+      if (value.startsWith('item=')) {
+        const [kind = '', name = ''] = value.slice(5).split('\t')
+        if (!name) return
+        snapshot.items.push({
+          kind: String(kind || '').trim(),
+          name: String(name || '').trim(),
+        })
+        return
+      }
+      const index = value.indexOf('=')
+      if (index <= 0) return
+      const key = value.slice(0, index).trim()
+      const raw = value.slice(index + 1).trim()
+      if (key === 'cwd') snapshot.cwd = raw
+      if (key === 'dirs') snapshot.dirs = Number(raw || 0)
+      if (key === 'files') snapshot.files = Number(raw || 0)
+      if (key === 'total') snapshot.total = Number(raw || 0)
+      if (key === 'size') snapshot.size = raw || '--'
+    })
+  return snapshot
 }
 
 function runStandaloneSshScript({
@@ -491,6 +564,14 @@ export function registerSshIpc(ipcMain, deps) {
         ok: true,
         supported: true,
         metrics: {
+          host: nextMetrics.host,
+          user: nextMetrics.user,
+          cwd: nextMetrics.cwd,
+          kernel: nextMetrics.kernel,
+          os: nextMetrics.os,
+          shell: nextMetrics.shell,
+          uptime: nextMetrics.uptime,
+          loadAverage: nextMetrics.loadAverage,
           cpuPercent: nextMetrics.cpuPercent,
           memoryPercent: nextMetrics.memoryPercent,
           diskPercent: nextMetrics.diskPercent,
@@ -504,6 +585,28 @@ export function registerSshIpc(ipcMain, deps) {
       }
     } catch (error) {
       return { ok: false, error: error?.message || '读取服务器状态失败' }
+    }
+  })
+
+  ipcMain.handle('ssh:inspect-path', async (_event, payload) => {
+    const parsed = safeParse(sshInspectPathSchema, payload)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const { sessionId, path } = parsed.data
+    const session = sshSessions.get(sessionId)
+    if (!session) return { ok: false, error: 'SSH 会话不存在' }
+    if (!session?.conn) return { ok: false, error: 'SSH 会话不可用' }
+    try {
+      const output = await runSshExec(session, buildInspectPathCommand(path), 6000)
+      return {
+        ok: true,
+        snapshot: parseInspectPathOutput(output),
+      }
+    } catch (error) {
+      const message = String(error?.message || '目录读取失败')
+      if (/exit 9|No such file|can.t cd/i.test(message)) {
+        return { ok: false, error: '目录不存在或无权限访问' }
+      }
+      return { ok: false, error: message }
     }
   })
 }

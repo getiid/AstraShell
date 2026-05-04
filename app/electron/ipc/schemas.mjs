@@ -50,6 +50,11 @@ export const sshWriteSchema = z.object({
   data: z.string().default(''),
 })
 
+export const sshInspectPathSchema = z.object({
+  sessionId: nonEmpty,
+  path: z.string().trim().default(''),
+})
+
 export const sshResizeSchema = z.object({
   sessionId: nonEmpty,
   cols: z.coerce.number().int().min(20).max(500).default(120),

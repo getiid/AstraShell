@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import os from 'node:os'
+import dns from 'node:dns'
 import crypto from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { v4 as uuidv4 } from 'uuid'
@@ -86,6 +87,45 @@ function saveLocalAuditLogs() {
     fs.mkdirSync(path.dirname(p), { recursive: true })
     fs.writeFileSync(p, JSON.stringify(localAuditLogs.slice(0, MAX_AUDIT_LOGS), null, 2), 'utf8')
   } catch {}
+}
+
+function getPrimaryLocalIpv4() {
+  try {
+    const interfaces = os.networkInterfaces()
+    for (const group of Object.values(interfaces || {})) {
+      for (const item of group || []) {
+        if (item?.family === 'IPv4' && !item.internal) return String(item.address || '')
+      }
+    }
+  } catch {}
+  return ''
+}
+
+function getDefaultGateway() {
+  try {
+    if (process.platform === 'darwin') {
+      const result = spawnSync('route', ['-n', 'get', 'default'], { encoding: 'utf8', timeout: 2000 })
+      const text = String(result.stdout || '')
+      const match = text.match(/gateway:\s+([^\s]+)/i)
+      return String(match?.[1] || '').trim()
+    }
+    if (process.platform === 'linux') {
+      const result = spawnSync('ip', ['route', 'show', 'default'], { encoding: 'utf8', timeout: 2000 })
+      const text = String(result.stdout || '')
+      const match = text.match(/default via ([^\s]+)/i)
+      return String(match?.[1] || '').trim()
+    }
+  } catch {}
+  return ''
+}
+
+function getDnsServers() {
+  try {
+    const items = dns.getServers().filter(Boolean)
+    return Array.isArray(items) ? items.slice(0, 3) : []
+  } catch {
+    return []
+  }
 }
 const macManualInstallTip = '当前构建未使用 Developer ID 签名，无法一键安装更新。请从 GitHub Release 下载 DMG 手动覆盖安装。'
 const githubReleaseProvider = {
@@ -2743,6 +2783,21 @@ app.on('before-quit', () => {
 ipcMain.handle('app:get-storage', async () => {
   const dbPath = resolveDbPath() || activeDbPath || ''
   return { ok: true, configured: !!dbPath, dbPath }
+})
+
+ipcMain.handle('app:get-network-route', async () => {
+  try {
+    return {
+      ok: true,
+      localIp: getPrimaryLocalIpv4(),
+      gateway: getDefaultGateway(),
+      dnsServers: getDnsServers(),
+      hostname: os.hostname(),
+      platform: process.platform,
+    }
+  } catch (error) {
+    return { ok: false, error: error?.message || '读取本机网络路径失败' }
+  }
 })
 
 ipcMain.handle('app:get-storage-meta', async () => {

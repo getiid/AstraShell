@@ -29,4 +29,6 @@ export type UseTerminalRuntimeParams = {
   snippetsLoaded: Ref<boolean>
   restoreSnippets: () => Promise<void>
   terminalEncodingStorageKey: string
+  onSshInput?: (data: string) => void
+  onTerminalCommandSent?: (command: string) => void
 }

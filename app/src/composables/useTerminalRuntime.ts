@@ -33,6 +33,8 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     snippetsLoaded,
     restoreSnippets,
     terminalEncodingStorageKey,
+    onSshInput,
+    onTerminalCommandSent,
   } = params
 
   let terminal: Terminal | null = null
@@ -70,6 +72,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     if (!data) return
     if (activeTerminalMode.value === 'ssh') {
       if (!sshConnected.value) return
+      onSshInput?.(data)
       await window.lightterm.sshWrite({ sessionId: sshSessionId.value, data })
       return
     }
@@ -95,6 +98,14 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       cols: terminal.cols,
       rows: terminal.rows,
     })
+  }
+
+  const sendTerminalCommand = async (command: string) => {
+    const payload = String(command || '').trim()
+    if (!payload) return
+    await writeActiveTerminalInput(`${payload}\n`)
+    onTerminalCommandSent?.(payload)
+    terminal?.focus()
   }
 
   const initTerminal = () => {
@@ -254,6 +265,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     initTerminal,
     applyTerminalTheme,
     writeActiveTerminalInput,
+    sendTerminalCommand,
     syncLocalTerminalSize,
     readClipboardText: clipboard.readClipboardText,
     copyTerminalSelection: clipboard.copyTerminalSelection,
