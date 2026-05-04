@@ -1,9 +1,7 @@
 import { nextTick } from 'vue'
 import { useAuditManager } from '../composables/useAuditManager'
-import { useDatabaseWorkspace } from '../composables/useDatabaseWorkspace'
 import { useAppShellSupport } from '../composables/useAppShellSupport'
 import { useHostWorkspace } from '../composables/useHostWorkspace'
-import { useLocalTerminalManager } from '../composables/useLocalTerminalManager'
 import { useSerialBaudSync } from '../composables/useSerialBaudSync'
 import { useSerialManager } from '../composables/useSerialManager'
 import { useSftpPanels } from '../composables/useSftpPanels'
@@ -68,24 +66,6 @@ export function useAppShellController() {
 
   let connectSSH: (optionsOrEvent?: { keepNav?: boolean } | Event) => Promise<boolean> = async () => false
   let connectSSHFromHosts = async () => {}
-
-  const localManager = useLocalTerminalManager({
-    isWindowsClient: support.isWindowsClient,
-    activeTerminalMode,
-    focusTerminal,
-    saveSessionRestoreState: support.saveSessionRestoreState,
-    clearSessionRestoreState: support.clearSessionRestoreState,
-    renderLocalSession: async (sessionId: string, options?: { announce?: string }) => {
-      await nextTick()
-      terminalBridge.initTerminal()
-      terminalBridge.applyTerminalTheme()
-      terminalBridge.resetTerminal()
-      terminalBridge.writeTerminal(localManager.localBufferBySession.value[sessionId] || '')
-      if (options?.announce) terminalBridge.writeTerminalLine(options.announce)
-      terminalBridge.focusNativeTerminal()
-      await terminalBridge.syncLocalTerminalSize()
-    },
-  })
 
   const serialManager = useSerialManager({
     sshStatus,
@@ -176,9 +156,6 @@ export function useAppShellController() {
     activeTerminalMode,
     serialConnected: serialManager.serialConnected,
     serialCurrentPath: serialManager.serialCurrentPath,
-    localConnected: localManager.localConnected,
-    activeLocalSessionId: localManager.activeLocalSessionId,
-    recordLocalInput: localManager.recordLocalInput,
     useHost: hostWorkspace.useHost,
     connectSSH,
     focusTerminal: () => terminalBridge.focusNativeTerminal(),
@@ -199,21 +176,6 @@ export function useAppShellController() {
     serialCurrentPath: serialManager.serialCurrentPath,
     pushSerialDialog: serialManager.pushSerialDialog,
     sshStatus,
-    localConnected: localManager.localConnected,
-    activeLocalSessionId: localManager.activeLocalSessionId,
-    localStatus: localManager.localStatus,
-    recordLocalInput: localManager.recordLocalInput,
-    appendLocalData: localManager.appendLocalData,
-    handleLocalClose: localManager.handleLocalClose,
-    handleLocalError: localManager.handleLocalError,
-    renderActiveLocalSession: async () => {
-      if (!localManager.activeLocalSessionId.value) return
-      await nextTick()
-      terminalBridge.initTerminal()
-      terminalBridge.applyTerminalTheme()
-      terminalBridge.resetTerminal()
-      terminalBridge.writeTerminal(localManager.localBufferBySession.value[localManager.activeLocalSessionId.value] || '')
-    },
     snippetsLoaded: snippetManager.snippetsLoaded,
     restoreSnippets: snippetManager.restoreSnippets,
     terminalEncodingStorageKey: TERMINAL_ENCODING_STORAGE_KEY,
@@ -305,14 +267,7 @@ export function useAppShellController() {
     focusTerminal,
     activeTerminalMode,
     sshStatus,
-    localStatus: localManager.localStatus,
-    localTabs: localManager.localTabs,
     termEl,
-  })
-
-  const databaseWorkspace = useDatabaseWorkspace({
-    openSnippetsPanel: navigation.openSnippetsPanel,
-    snippetItems: snippetManager.snippetItems,
   })
   const vaultManager = useVaultManager({ formatAppError: support.formatAppError })
 
@@ -337,9 +292,6 @@ export function useAppShellController() {
     sessionRestoreTried,
     resetVaultBase: vaultManager.resetVault,
     restoreSessionRestoreState: support.restoreSessionRestoreState,
-    localConnected: localManager.localConnected,
-    localCwd: localManager.localCwd,
-    connectLocalTerminal: localManager.connectLocalTerminal,
     sshForm,
     hostName,
     authType,
@@ -371,7 +323,6 @@ export function useAppShellController() {
     hideAllMenus: textContextMenu.hideAllMenus,
     handleTerminalHotkeys: terminalBridge.handleTerminalHotkeys,
     disposeSerial: serialManager.disposeSerial,
-    disconnectAllLocalTabs: localManager.disconnectAllLocalTabs,
   })
 
   const sshMetrics = useSshServerMetrics({
@@ -408,9 +359,7 @@ export function useAppShellController() {
     sftpWorkspace,
     snippetManager,
     auditManager,
-    databaseWorkspace,
     serialManager,
-    localManager,
     navigation,
     updateManager,
     storageManager,

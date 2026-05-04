@@ -2,9 +2,7 @@
 import { useAppShellController } from './useAppShellController'
 import AppSidebar from './AppSidebar.vue'
 import AppStatusBar from './AppStatusBar.vue'
-import DatabasePanel from './panels/DatabasePanel.vue'
 import HostsPanel from './panels/HostsPanel.vue'
-import LocalPanel from './panels/LocalPanel.vue'
 import LogsPanel from './panels/LogsPanel.vue'
 import SerialPanel from './panels/SerialPanel.vue'
 import SettingsPanel from './panels/SettingsPanel.vue'
@@ -23,9 +21,7 @@ const {
   sftpPanelVm,
   snippetsPanelVm,
   logsPanelVm,
-  databasePanelVm,
   serialPanelVm,
-  localPanelVm,
   hostsPanelVm,
   settingsPanelVm,
   vaultPanelVm,
@@ -45,13 +41,11 @@ const {
 
       <HostsPanel v-if="!focusTerminal && nav === 'hosts'" :vm="hostsPanelVm" />
       <SftpPanel v-else-if="!focusTerminal && nav === 'sftp'" :vm="sftpPanelVm" />
-      <SnippetsPanel v-else-if="!focusTerminal && nav === 'snippets'" :vm="snippetsPanelVm" />
       <SerialPanel v-else-if="!focusTerminal && nav === 'serial'" :vm="serialPanelVm" />
-      <LocalPanel v-else-if="!focusTerminal && nav === 'local'" :vm="localPanelVm" />
-      <DatabasePanel v-else-if="!focusTerminal && nav === 'database'" :vm="databasePanelVm" />
+      <SnippetsPanel v-else-if="!focusTerminal && nav === 'snippets'" :vm="snippetsPanelVm" />
       <VaultPanel v-else-if="!focusTerminal && nav === 'vault'" :vm="vaultPanelVm" />
-      <SettingsPanel v-else-if="!focusTerminal && nav === 'settings'" :vm="settingsPanelVm" />
       <LogsPanel v-else-if="!focusTerminal && nav === 'logs'" :vm="logsPanelVm" />
+      <SettingsPanel v-else-if="!focusTerminal && nav === 'settings'" :vm="settingsPanelVm" />
       <section v-else-if="!focusTerminal" class="panel"><h3>模块建设中</h3><p>当前页面：{{ nav }}</p></section>
 
       <TextContextMenu :vm="textContextMenuVm" />

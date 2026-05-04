@@ -9,9 +9,9 @@ export type UseSnippetManagerParams = {
   activeTerminalMode: Ref<TerminalMode>
   serialConnected: Ref<boolean>
   serialCurrentPath: Ref<string>
-  localConnected: Readonly<Ref<boolean>>
-  activeLocalSessionId: Readonly<Ref<string>>
-  recordLocalInput: (sessionId: string, data: string) => void
+  localConnected?: Readonly<Ref<boolean>>
+  activeLocalSessionId?: Readonly<Ref<string>>
+  recordLocalInput?: (sessionId: string, data: string) => void
   useHost: (host: any) => void
   connectSSH: (options?: { keepNav?: boolean } | Event) => Promise<boolean>
   focusTerminal: () => void

@@ -4,8 +4,6 @@ export function createAppShellNavigation(parts: Record<string, any>) {
     focusTerminal,
     activeTerminalMode,
     sshStatus,
-    localStatus,
-    localTabs,
     termEl,
   } = parts
 
@@ -34,21 +32,11 @@ export function createAppShellNavigation(parts: Record<string, any>) {
     sshStatus.value = '请选择一个 SSH 主机，或在顶部输入快速连接'
   }
 
-  const openLocalTerminalChooser = () => {
-    activeTerminalMode.value = 'local'
-    nav.value = 'local'
-    focusTerminal.value = false
-    localStatus.value = localTabs.value.length > 0
-      ? '已返回本地终端面板，可继续进入已开的会话'
-      : '请选择或新建一个本地终端'
-  }
-
   return {
     bindTermEl,
     exitTerminalView,
     selectNav,
     openSnippetsPanel,
     openSshConnectionChooser,
-    openLocalTerminalChooser,
   }
 }

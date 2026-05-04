@@ -22,14 +22,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     serialCurrentPath,
     pushSerialDialog,
     sshStatus,
-    localConnected,
-    activeLocalSessionId,
-    localStatus,
-    recordLocalInput,
-    appendLocalData,
-    handleLocalClose,
-    handleLocalError,
-    renderActiveLocalSession,
     snippetsLoaded,
     restoreSnippets,
     terminalEncodingStorageKey,
@@ -44,7 +36,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     loadTerminalEncoding,
     clearSessionDecoders,
     decodeSshPayload,
-    decodePlainPayload,
   } = createTerminalRuntimeDecoding(terminalEncodingStorageKey)
 
   const presentation = createTerminalRuntimePresentation({
@@ -53,7 +44,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     sshSessionId,
     sshTabs,
     serialCurrentPath,
-    localStatus,
     getTerminal,
   })
   const applyTerminalTheme = presentation.applyTerminalTheme
@@ -78,23 +68,10 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       await window.lightterm.sendSerial({ path: serialCurrentPath.value, data, isHex: false })
       return
     }
-    if (!localConnected.value || !activeLocalSessionId.value) return
-    const res = await window.lightterm.localWrite({ sessionId: activeLocalSessionId.value, data })
-    if (!res.ok) {
-      localStatus.value = `本地终端写入失败：${res.error || '未知错误'}`
-      terminal?.writeln(`\r\n[本地终端写入失败] ${res.error || '未知错误'}`)
-      return
-    }
-    recordLocalInput(activeLocalSessionId.value, data)
   }
 
   const syncLocalTerminalSize = async () => {
-    if (!terminal || !localConnected.value || !activeLocalSessionId.value) return
-    await window.lightterm.localResize({
-      sessionId: activeLocalSessionId.value,
-      cols: terminal.cols,
-      rows: terminal.rows,
-    })
+    // 本地终端已移除
   }
 
   const initTerminal = () => {
@@ -123,8 +100,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     if (focusTerminal.value) {
       if (activeTerminalMode.value === 'ssh') {
         renderActiveSshBuffer()
-      } else if (activeTerminalMode.value === 'local') {
-        void renderActiveLocalSession()
       }
     }
     termEl.value.addEventListener('click', () => terminal?.focus())
@@ -168,31 +143,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
         terminal?.writeln(`\r\n[串口错误] ${msg.error || '未知错误'}`)
       }
     })
-    window.lightterm.onLocalData((msg) => {
-      const sessionId = String(msg?.sessionId || '')
-      if (!sessionId) return
-      const text = decodePlainPayload(msg)
-      appendLocalData(sessionId, text)
-      if (sessionId !== activeLocalSessionId.value) return
-      if (activeTerminalMode.value !== 'local') return
-      terminal?.write(text)
-    })
-    window.lightterm.onLocalClose((msg) => {
-      const sessionId = String(msg?.sessionId || '')
-      if (!sessionId) return
-      handleLocalClose(sessionId, Number(msg?.code || 0))
-      if (sessionId === activeLocalSessionId.value && activeTerminalMode.value === 'local') {
-        terminal?.writeln(`\r\n[本地终端已断开] code=${Number(msg?.code || 0)}`)
-      }
-    })
-    window.lightterm.onLocalError((msg) => {
-      const sessionId = String(msg?.sessionId || '')
-      if (!sessionId) return
-      handleLocalError(sessionId, String(msg?.error || '未知错误'))
-      if (sessionId === activeLocalSessionId.value && activeTerminalMode.value === 'local') {
-        terminal?.writeln(`\r\n[本地终端错误] ${msg?.error || '未知错误'}`)
-      }
-    })
   }
 
   watch(focusTerminal, (value) => {
@@ -203,8 +153,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       if (!value) return
       if (activeTerminalMode.value === 'ssh') {
         renderActiveSshBuffer()
-      } else if (activeTerminalMode.value === 'local') {
-        void renderActiveLocalSession()
       }
       terminal?.focus()
     })
@@ -218,8 +166,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       if (!focusTerminal.value) return
       if (activeTerminalMode.value === 'ssh') {
         renderActiveSshBuffer()
-      } else if (activeTerminalMode.value === 'local') {
-        void renderActiveLocalSession()
       }
       terminal?.focus()
     })
@@ -232,8 +178,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     serialConnected,
     serialCurrentPath,
     sshStatus,
-    localConnected,
-    activeLocalSessionId,
     getTerminal,
   })
 

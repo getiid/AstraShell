@@ -10,9 +10,9 @@ type CreateSnippetExecutionParams = {
   activeTerminalMode: Ref<TerminalMode>
   serialConnected: Ref<boolean>
   serialCurrentPath: Ref<string>
-  localConnected: Readonly<Ref<boolean>>
-  activeLocalSessionId: Readonly<Ref<string>>
-  recordLocalInput: (sessionId: string, data: string) => void
+  localConnected?: Readonly<Ref<boolean>>
+  activeLocalSessionId?: Readonly<Ref<string>>
+  recordLocalInput?: (sessionId: string, data: string) => void
   useHost: (host: any) => void
   connectSSH: (options?: { keepNav?: boolean } | Event) => Promise<boolean>
   focusTerminal: () => void
@@ -37,9 +37,6 @@ export function createSnippetExecution(params: CreateSnippetExecutionParams) {
     activeTerminalMode,
     serialConnected,
     serialCurrentPath,
-    localConnected,
-    activeLocalSessionId,
-    recordLocalInput,
     useHost,
     connectSSH,
     focusTerminal,
@@ -164,35 +161,6 @@ export function createSnippetExecution(params: CreateSnippetExecutionParams) {
     }
   }
 
-  const sendCommandsToLocalTerminal = async (target: SnippetItem, lines: string[]) => {
-    if (!localConnected.value || !activeLocalSessionId.value) {
-      snippetStatus.value = '请先连接本地终端'
-      return
-    }
-    snippetRunning.value = true
-    snippetStopRequested.value = false
-    const delayMs = Math.max(120, Number(snippetRunDelayMs.value || 0))
-    let sent = 0
-    for (let i = 0; i < lines.length; i += 1) {
-      if (snippetStopRequested.value) break
-      const cmd = lines[i]
-      const res = await window.lightterm.localWrite({ sessionId: activeLocalSessionId.value, data: `${cmd}\n` })
-      if (!res.ok) {
-        snippetStatus.value = `本地执行失败：${res.error || '未知错误'}`
-        break
-      }
-      recordLocalInput(activeLocalSessionId.value, `${cmd}\n`)
-      sent += 1
-      if (i < lines.length - 1) await sleep(delayMs)
-    }
-    snippetRunning.value = false
-    snippetStopRequested.value = false
-    snippetStatus.value = sent === lines.length
-      ? `本地执行完成：${target.name}`
-      : `本地已执行 ${sent}/${lines.length}`
-    focusTerminal()
-  }
-
   const ensureSnippetSession = async (target: SnippetItem) => {
     if (target.hostId) {
       const host = hostItems.value.find((item) => item.id === target.hostId)
@@ -295,20 +263,7 @@ export function createSnippetExecution(params: CreateSnippetExecutionParams) {
       return
     }
 
-    await sendCommandsToLocalTerminal(target, lines)
-  }
-
-  const executeSnippetOnLocalTerminal = async (target: SnippetItem) => {
-    if (!target?.id) {
-      snippetStatus.value = '没有可执行的代码片段'
-      return
-    }
-    const lines = snippetCommandLines(target.commands || '')
-    if (lines.length === 0) {
-      snippetStatus.value = '没有可执行命令（空行和 # 注释会自动跳过）'
-      return
-    }
-    await sendCommandsToLocalTerminal(target, lines)
+    snippetStatus.value = '请先连接 SSH 或串口'
   }
 
   const sendSnippetRawToTerminal = async () => {
@@ -329,21 +284,20 @@ export function createSnippetExecution(params: CreateSnippetExecutionParams) {
     } else if (activeTerminalMode.value === 'serial' && (!serialConnected.value || !serialCurrentPath.value)) {
       snippetStatus.value = '请先连接串口'
       return
-    } else if (activeTerminalMode.value === 'local' && (!localConnected.value || !activeLocalSessionId.value)) {
-      snippetStatus.value = '请先连接本地终端'
-      return
     }
 
     const res = activeTerminalMode.value === 'ssh'
       ? await window.lightterm.sshWrite({ sessionId: sshSessionId.value, data: payload })
       : activeTerminalMode.value === 'serial'
         ? await window.lightterm.sendSerial({ path: serialCurrentPath.value, data: payload, isHex: false })
-        : await window.lightterm.localWrite({ sessionId: activeLocalSessionId.value, data: payload })
-    if (res.ok && activeTerminalMode.value === 'local' && activeLocalSessionId.value) {
-      recordLocalInput(activeLocalSessionId.value, payload)
+        : { ok: false, error: '不支持的终端模式' }
+
+    if (res.ok) {
+      snippetStatus.value = `已发送：${target.name}`
+      focusTerminal()
+    } else {
+      snippetStatus.value = `发送失败：${res.error || '未知错误'}`
     }
-    snippetStatus.value = res.ok ? `片段原文已发送：${target.name}` : `片段发送失败：${res.error || '未知错误'}`
-    focusTerminal()
   }
 
   return {
@@ -352,7 +306,6 @@ export function createSnippetExecution(params: CreateSnippetExecutionParams) {
     stopSnippet,
     getTerminalSnippet,
     runTerminalSnippet,
-    executeSnippetOnLocalTerminal,
     sendSnippetRawToTerminal,
   }
 }

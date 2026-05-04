@@ -10,8 +10,6 @@ export function createTerminalRuntimeClipboard(params: {
   serialConnected: Ref<boolean>
   serialCurrentPath: Ref<string>
   sshStatus: Ref<string>
-  localConnected: Readonly<Ref<boolean>>
-  activeLocalSessionId: Readonly<Ref<string>>
   getTerminal: () => Terminal | null
 }) {
   const {
@@ -22,8 +20,6 @@ export function createTerminalRuntimeClipboard(params: {
     serialConnected,
     serialCurrentPath,
     sshStatus,
-    localConnected,
-    activeLocalSessionId,
     getTerminal,
   } = params
 
@@ -49,13 +45,13 @@ export function createTerminalRuntimeClipboard(params: {
       ? sshConnected.value
       : activeTerminalMode.value === 'serial'
         ? serialConnected.value
-        : localConnected.value
+        : false
     if (!ready) {
       sshStatus.value = activeTerminalMode.value === 'ssh'
         ? '请先连接 SSH 会话'
         : activeTerminalMode.value === 'serial'
           ? '请先连接串口'
-          : '请先连接本地终端'
+          : '不支持的终端模式'
       return
     }
     const text = await readClipboardText()
@@ -67,7 +63,7 @@ export function createTerminalRuntimeClipboard(params: {
       ? await window.lightterm.sshWrite({ sessionId: sshSessionId.value, data: text })
       : activeTerminalMode.value === 'serial'
         ? await window.lightterm.sendSerial({ path: serialCurrentPath.value, data: text, isHex: false })
-        : await window.lightterm.localWrite({ sessionId: activeLocalSessionId.value, data: text })
+        : { ok: false, error: '不支持的终端模式' }
     sshStatus.value = res.ok ? '已粘贴到终端' : `粘贴失败：${res.error || '未知错误'}`
     terminal?.focus()
   }

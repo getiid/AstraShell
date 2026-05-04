@@ -35,9 +35,6 @@ export function useSnippetManager(params: UseSnippetManagerParams) {
     activeTerminalMode,
     serialConnected,
     serialCurrentPath,
-    localConnected,
-    activeLocalSessionId,
-    recordLocalInput,
     useHost,
     connectSSH,
     focusTerminal,
@@ -149,7 +146,6 @@ export function useSnippetManager(params: UseSnippetManagerParams) {
     stopSnippet,
     getTerminalSnippet,
     runTerminalSnippet,
-    executeSnippetOnLocalTerminal,
     sendSnippetRawToTerminal,
   } = createSnippetExecution({
     hostItems,
@@ -159,9 +155,6 @@ export function useSnippetManager(params: UseSnippetManagerParams) {
     activeTerminalMode,
     serialConnected,
     serialCurrentPath,
-    localConnected,
-    activeLocalSessionId,
-    recordLocalInput,
     useHost,
     connectSSH,
     focusTerminal,
@@ -256,7 +249,6 @@ export function useSnippetManager(params: UseSnippetManagerParams) {
     snippetReminderTone,
     getTerminalSnippet,
     runTerminalSnippet,
-    executeSnippetOnLocalTerminal,
     sendSnippetRawToTerminal,
   }
 }

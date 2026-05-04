@@ -1,18 +1,16 @@
 <script setup lang="ts">
-import { Cable, Database, FolderTree, KeyRound, Pencil, Server, Settings } from 'lucide-vue-next'
+import { Cable, FolderTree, KeyRound, Pencil, Server, Settings, FileText } from 'lucide-vue-next'
 
 const { vm } = defineProps<{ vm: any }>()
 
 const navItems = [
   { key: 'hosts', label: '主机管理', icon: Server },
   { key: 'sftp', label: '文件传输', icon: FolderTree },
-  { key: 'local', label: '本地终端', icon: Server },
-  { key: 'database', label: '数据库连接', icon: Database },
   { key: 'serial', label: '串口工具', icon: Cable },
   { key: 'snippets', label: '代码片段', icon: Pencil },
   { key: 'vault', label: '密钥管理', icon: KeyRound },
+  { key: 'logs', label: '操作日志', icon: FileText },
   { key: 'settings', label: '应用设置', icon: Settings },
-  { key: 'logs', label: '操作日志', icon: Pencil },
 ]
 </script>
 

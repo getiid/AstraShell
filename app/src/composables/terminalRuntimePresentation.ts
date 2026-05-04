@@ -11,7 +11,6 @@ export function createTerminalRuntimePresentation(params: {
   sshSessionId: Ref<string>
   sshTabs: Ref<Array<{ id: string; name: string; connected: boolean }>>
   serialCurrentPath: Ref<string>
-  localStatus: Ref<string>
   getTerminal: () => Terminal | null
 }) {
   const {
@@ -20,7 +19,6 @@ export function createTerminalRuntimePresentation(params: {
     sshSessionId,
     sshTabs,
     serialCurrentPath,
-    localStatus,
     getTerminal,
   } = params
 
@@ -39,7 +37,7 @@ export function createTerminalRuntimePresentation(params: {
       return tab?.name || sshSessionId.value
     }
     if (activeTerminalMode.value === 'serial') return serialCurrentPath.value || '未连接串口'
-    return localStatus.value || '未连接'
+    return '未连接'
   })
 
   const applyTerminalTheme = () => {
