@@ -27,6 +27,7 @@ declare global {
   interface Window {
     lightterm: {
       appGetStorage: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string }>
+      appGetNetworkRoute: () => Promise<{ ok: boolean; localIp?: string; gateway?: string; dnsServers?: string[]; hostname?: string; platform?: string; error?: string }>
       appGetStorageMeta: () => Promise<{ ok: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; decryptState?: string; unlockRequired?: boolean; storageVersion?: number; fileId?: string; revision?: number; signature?: string; hosts?: number; dbConnections?: number; snippets?: number; vaultKeys?: number; quickTools?: number; itemCount?: number; logs?: number }>
       appRefreshStorageData: () => Promise<{ ok: boolean; changed?: boolean; configured?: boolean; dbPath?: string; exists?: boolean; size?: number; mtimeMs?: number; encrypted?: boolean; decryptState?: string; unlockRequired?: boolean; storageVersion?: number; fileId?: string; revision?: number; signature?: string; hosts?: number; dbConnections?: number; snippets?: number; vaultKeys?: number; quickTools?: number; itemCount?: number; logs?: number; error?: string }>
       appPickStorageFolder: () => Promise<{ ok: boolean; folder?: string; error?: string }>
@@ -123,7 +124,8 @@ declare global {
       sshList: () => Promise<{ ok: boolean; items?: Array<{ sessionId: string; target?: string }>; error?: string }>
       sshConnect: (config: SSHConfig & { sessionId: string; displayName?: string }) => Promise<{ ok: boolean; error?: string }>
       sshExecScript: (payload: SSHConfig & { script: string; timeoutMs?: number }) => Promise<{ ok: boolean; code?: number; stdout?: string; stderr?: string; error?: string }>
-      sshMetrics: (payload: { sessionId: string }) => Promise<{ ok: boolean; supported?: boolean; metrics?: { cpuPercent?: number | null; memoryPercent?: number | null; diskPercent?: number | null; memoryUsedKb?: number; memoryTotalKb?: number; diskUsedKb?: number; diskTotalKb?: number; rxBytesPerSec?: number; txBytesPerSec?: number } | null; error?: string }>
+      sshMetrics: (payload: { sessionId: string }) => Promise<{ ok: boolean; supported?: boolean; metrics?: { host?: string; user?: string; cwd?: string; kernel?: string; os?: string; shell?: string; uptime?: string; loadAverage?: string; cpuPercent?: number | null; memoryPercent?: number | null; diskPercent?: number | null; memoryUsedKb?: number; memoryTotalKb?: number; diskUsedKb?: number; diskTotalKb?: number; rxBytesPerSec?: number; txBytesPerSec?: number } | null; error?: string }>
+      sshInspectPath: (payload: { sessionId: string; path: string }) => Promise<{ ok: boolean; snapshot?: { cwd?: string; dirs?: number; files?: number; total?: number; size?: string; items?: Array<{ kind?: string; name?: string }> } | null; error?: string }>
       sshWrite: (payload: { sessionId: string; data: string }) => Promise<{ ok: boolean; error?: string }>
       sshResize: (payload: { sessionId: string; cols: number; rows: number }) => Promise<{ ok: boolean; error?: string }>
       sshDisconnect: (payload: { sessionId: string }) => Promise<{ ok: boolean; error?: string }>

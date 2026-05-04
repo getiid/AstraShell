@@ -1,0 +1,8 @@
+version: 0.3.20
+files:
+  - url: AstraShell-0.3.20-arm64.AppImage
+    sha512: xZYozY7Uq3FTEZulfUbg6HBwl3wcs9L0wVNUOatPaaV8WSce+bFVFEe1gCOgYVu5RM19GzH+EomHfJ7MLpxxqA==
+    size: 144417221
+path: AstraShell-0.3.20-arm64.AppImage
+sha512: xZYozY7Uq3FTEZulfUbg6HBwl3wcs9L0wVNUOatPaaV8WSce+bFVFEe1gCOgYVu5RM19GzH+EomHfJ7MLpxxqA==
+releaseDate: '2026-05-03T10:44:26.442Z'

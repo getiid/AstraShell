@@ -1,5 +1,6 @@
 export function buildTerminalWorkspaceVm(parts: Record<string, any>) {
   return {
+    nav: parts.nav,
     focusTerminal: parts.focusTerminal,
     terminalModeLabel: parts.terminalModeLabel,
     terminalTargetLabel: parts.terminalTargetLabel,
@@ -11,6 +12,7 @@ export function buildTerminalWorkspaceVm(parts: Record<string, any>) {
     terminalSnippetCategory: parts.terminalSnippetCategory,
     terminalSnippetCategories: parts.terminalSnippetCategories,
     terminalSnippetItems: parts.terminalSnippetItems,
+    sendTerminalCommand: parts.sendTerminalCommand,
     snippetRunning: parts.snippetRunning,
     snippetKeyword: parts.snippetKeyword,
     switchSshTab: parts.switchSshTab,
@@ -28,5 +30,22 @@ export function buildTerminalWorkspaceVm(parts: Record<string, any>) {
     exitTerminalView: parts.exitTerminalView,
     openSnippetsPanel: parts.openSnippetsPanel,
     openSshConnectionChooser: parts.openSshConnectionChooser,
+    sshServerMetrics: parts.sshServerMetrics,
+    sshServerMetricsLoading: parts.sshServerMetricsLoading,
+    sshServerMetricsError: parts.sshServerMetricsError,
+    activeSshTabName: parts.activeSshTabName,
+    sshMetricChips: parts.sshMetricChips,
+    sshConnectionFacts: parts.sshConnectionFacts,
+    sshSystemFacts: parts.sshSystemFacts,
+    sshDirectorySnapshot: parts.sshDirectorySnapshot,
+    sshDirectoryLoading: parts.sshDirectoryLoading,
+    sshDirectoryError: parts.sshDirectoryError,
+    sshDirectoryStats: parts.sshDirectoryStats,
+    sshNetworkRoute: parts.sshNetworkRoute,
+    sshNetworkRouteLoading: parts.sshNetworkRouteLoading,
+    sshNetworkRouteVisible: parts.sshNetworkRouteVisible,
+    sshNetworkRouteError: parts.sshNetworkRouteError,
+    sshNetworkRouteSteps: parts.sshNetworkRouteSteps,
+    runSshMetricAction: parts.runSshMetricAction,
   }
 }

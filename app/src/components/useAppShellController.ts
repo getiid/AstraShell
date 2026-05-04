@@ -161,6 +161,15 @@ export function useAppShellController() {
     focusTerminal: () => terminalBridge.focusNativeTerminal(),
   })
 
+  const sshMetrics = useSshServerMetrics({
+    nav,
+    focusTerminal,
+    activeTerminalMode,
+    sshConnected,
+    sshSessionId,
+    sshTabs: terminalTabs.sshTabs,
+  })
+
   const terminalRuntime = useTerminalRuntime({
     termEl,
     focusTerminal,
@@ -179,6 +188,8 @@ export function useAppShellController() {
     snippetsLoaded: snippetManager.snippetsLoaded,
     restoreSnippets: snippetManager.restoreSnippets,
     terminalEncodingStorageKey: TERMINAL_ENCODING_STORAGE_KEY,
+    onSshInput: sshMetrics.trackTerminalInput,
+    onTerminalCommandSent: sshMetrics.trackTerminalCommand,
   })
   applyRuntime(terminalRuntime)
 
@@ -325,14 +336,6 @@ export function useAppShellController() {
     disposeSerial: serialManager.disposeSerial,
   })
 
-  const sshMetrics = useSshServerMetrics({
-    nav,
-    focusTerminal,
-    activeTerminalMode,
-    sshConnected,
-    sshSessionId,
-    sshTabs: terminalTabs.sshTabs,
-  })
   const viewModels = useAppShellViewModelBundle({
     nav,
     sshStatus,
@@ -348,6 +351,7 @@ export function useAppShellController() {
     sshTabActions,
     sshSessionId,
     terminalEncoding: terminalBridge.terminalEncoding,
+    sendTerminalCommand: terminalBridge.sendTerminalCommand,
     selectedHostId,
     editingHost,
     hostEditorVisible,

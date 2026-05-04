@@ -1,0 +1,8 @@
+version: 0.3.20
+files:
+  - url: AstraShell-0.3.20-arm64-mac.zip
+    sha512: jAWi/iJrg9hhXuJUxLFQOjSj+pNYYmFk+zgHeB0GbV8MlGig70b0O6ACyGQ2nyTFKidSARBXCugzEPhunLSpKQ==
+    size: 134958834
+path: AstraShell-0.3.20-arm64-mac.zip
+sha512: jAWi/iJrg9hhXuJUxLFQOjSj+pNYYmFk+zgHeB0GbV8MlGig70b0O6ACyGQ2nyTFKidSARBXCugzEPhunLSpKQ==
+releaseDate: '2026-05-03T10:44:26.442Z'
