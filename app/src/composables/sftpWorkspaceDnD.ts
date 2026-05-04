@@ -1,5 +1,23 @@
 import type { UseSftpWorkspaceParams } from './sftpWorkspaceTypes'
 
+const isRemoteDir = (item: any) => !!(item?.isDir || item?.is_dir)
+
+const normalizeRemoteBasePath = (path: string) => {
+  const value = String(path || '').trim()
+  if (!value || value === '.') return '.'
+  if (value === '/') return '/'
+  return value.replace(/\/+$/, '') || '/'
+}
+
+const joinRemotePath = (basePath: string, name: string) => {
+  const base = normalizeRemoteBasePath(basePath)
+  const entry = String(name || '').trim().replace(/^\/+/, '')
+  if (!entry) return base
+  if (base === '.') return entry
+  if (base === '/') return `/${entry}`
+  return `${base}/${entry}`
+}
+
 type DndDeps = {
   uploadSftp: () => Promise<void>
   downloadSftp: () => Promise<void>
@@ -45,7 +63,7 @@ export function createSftpWorkspaceDnD(params: UseSftpWorkspaceParams, deps: Dnd
   }
 
   const onRemoteDragStart = (item: any) => {
-    if (item?.isDir) return
+    if (isRemoteDir(item)) return
     sftpDragRemoteFile.value = item.filename
   }
 
@@ -67,7 +85,7 @@ export function createSftpWorkspaceDnD(params: UseSftpWorkspaceParams, deps: Dnd
       sftpStatus.value = '请先进入左侧具体盘符目录，再接收下载文件'
       return
     }
-    const remoteFile = `${sftpPath.value.replace(/\/$/, '')}/${sftpDragRemoteFile.value}`
+    const remoteFile = joinRemotePath(sftpPath.value, sftpDragRemoteFile.value)
     const res = await window.lightterm.sftpDownloadToLocal({
       ...config,
       remoteFile,

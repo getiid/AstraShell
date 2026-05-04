@@ -66,7 +66,9 @@ const formatFileSize = (value: unknown) => {
   return `${current >= 100 || index === 0 ? current.toFixed(0) : current.toFixed(1)} ${units[index]}`
 }
 
-const fileKindLabel = (item: any) => (item?.isDir ? '目录' : '文件')
+const isDirRow = (item: any) => !!(item?.isDir || item?.is_dir)
+
+const fileKindLabel = (item: any) => (isDirRow(item) ? '目录' : '文件')
 
 const hostTitle = (host: any) => String(host?.name || host?.host || '未命名服务器')
 
@@ -399,14 +401,14 @@ const jumpRightPath = async () => {
               :key="vm.leftPanelMode.value === 'local' ? l.path : l.filename"
               :data-sftp-row-key="leftItemKey(l)"
               class="sftp-file-row"
-              :class="{ 'is-dir': l.isDir, active: isLeftSelected(l) }"
+              :class="{ 'is-dir': isDirRow(l), active: isLeftSelected(l) }"
               :draggable="vm.leftPanelMode.value === 'local'"
               @click="handleLeftRowClick($event, l, Number(index))"
               @dblclick="vm.openLeftItem(l)"
               @dragstart="preventDragDuringBoxSelect($event); vm.onLeftDragStart(l)"
             >
               <div class="sftp-file-main name">
-                <span class="sftp-file-icon">{{ l.isDir ? '📁' : '📄' }}</span>
+                <span class="sftp-file-icon">{{ isDirRow(l) ? '📁' : '📄' }}</span>
                 <div class="sftp-file-copy">
                   <strong>{{ vm.leftPanelMode.value === 'local' ? l.name : l.filename }}</strong>
                 </div>
@@ -414,7 +416,7 @@ const jumpRightPath = async () => {
               <div class="sftp-file-meta">
                 <span>{{ vm.formatFsTime(vm.leftPanelMode.value === 'local' ? l.modifiedAt : (l.modifiedAt || l.mtime)) }}</span>
               </div>
-              <div class="sftp-file-size">{{ l.isDir ? '—' : formatFileSize(l.size) }}</div>
+              <div class="sftp-file-size">{{ isDirRow(l) ? '—' : formatFileSize(l.size) }}</div>
               <div class="sftp-file-kind">{{ fileKindLabel(l) }}</div>
             </div>
             <div v-if="vm.leftDisplayRows.value.length === 0" class="sftp-file-empty">
@@ -547,23 +549,23 @@ const jumpRightPath = async () => {
               :key="vm.rightPanelMode.value === 'remote' ? r.filename : r.path"
               :data-sftp-row-key="rightItemKey(r)"
               class="sftp-file-row"
-              :class="{ 'is-dir': r.isDir, active: isRightSelected(r) }"
-              :draggable="!r.isDir"
+              :class="{ 'is-dir': isDirRow(r), active: isRightSelected(r) }"
+              :draggable="!isDirRow(r)"
               @click="handleRightRowClick($event, r, Number(index))"
               @dblclick="vm.openRightItem(r)"
               @contextmenu="handleRightContextMenu($event, r, Number(index))"
               @dragstart="preventDragDuringBoxSelect($event); vm.onRightDragStart(r)"
             >
               <div class="sftp-file-main name">
-                <span class="sftp-file-icon">{{ r.isDir ? '📁' : '📄' }}</span>
+                <span class="sftp-file-icon">{{ isDirRow(r) ? '📁' : '📄' }}</span>
                 <div class="sftp-file-copy">
                   <strong>{{ vm.rightPanelMode.value === 'remote' ? r.filename : r.name }}</strong>
                 </div>
               </div>
               <div class="sftp-file-meta">
-                <span>{{ r.isDir ? '—' : vm.formatFsTime(vm.rightPanelMode.value === 'remote' ? (r.modifiedAt || r.mtime) : r.modifiedAt) }}</span>
+                <span>{{ isDirRow(r) ? '—' : vm.formatFsTime(vm.rightPanelMode.value === 'remote' ? (r.modifiedAt || r.mtime) : r.modifiedAt) }}</span>
               </div>
-              <div class="sftp-file-size">{{ r.isDir ? '—' : formatFileSize(r.size) }}</div>
+              <div class="sftp-file-size">{{ isDirRow(r) ? '—' : formatFileSize(r.size) }}</div>
               <div class="sftp-file-kind">{{ fileKindLabel(r) }}</div>
             </div>
             <div v-if="vm.rightDisplayRows.value.length === 0" class="sftp-file-empty">

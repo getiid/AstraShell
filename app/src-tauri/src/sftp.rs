@@ -116,10 +116,6 @@ fn with_sftp_session<T>(
     handler(&config, sftp)
 }
 
-fn is_dir_perm(perm: Option<u32>) -> bool {
-    perm.map(|value| value & 0o040000 == 0o040000).unwrap_or(false)
-}
-
 fn basename(path: &str) -> String {
     Path::new(path)
         .file_name()
@@ -222,7 +218,7 @@ fn remove_dir_recursive(sftp: &ssh2::Sftp, path: &Path) -> Result<(), String> {
         if name == "." || name == ".." {
             continue;
         }
-        if is_dir_perm(stat.perm) {
+        if stat.is_dir() {
             remove_dir_recursive(sftp, &child_path)?;
             sftp.rmdir(&child_path).map_err(|e| format!("删除远程目录失败: {}", e))?;
         } else {
@@ -271,14 +267,18 @@ pub async fn sftp_list_dir(
             if name == "." || name == ".." {
                 continue;
             }
+            let resolved_stat = sftp.stat(&entry_path).unwrap_or(stat.clone());
             items.push(SftpFileInfo {
                 filename: name,
                 path: entry_path.to_string_lossy().to_string(),
-                size: stat.size.unwrap_or(0),
-                is_dir: is_dir_perm(stat.perm),
-                mtime: stat.mtime.unwrap_or(0) as i64,
-                modified_at: stat.mtime.unwrap_or(0) as i64,
-                permissions: stat.perm.map(|perm| format!("{perm:o}")),
+                size: resolved_stat.size.unwrap_or(stat.size.unwrap_or(0)),
+                is_dir: resolved_stat.is_dir() || stat.is_dir(),
+                mtime: resolved_stat.mtime.unwrap_or(stat.mtime.unwrap_or(0)) as i64,
+                modified_at: resolved_stat.mtime.unwrap_or(stat.mtime.unwrap_or(0)) as i64,
+                permissions: resolved_stat
+                    .perm
+                    .or(stat.perm)
+                    .map(|perm| format!("{perm:o}")),
             });
         }
         items.sort_by(|a, b| match (a.is_dir, b.is_dir) {
@@ -356,7 +356,7 @@ pub async fn sftp_download(
     with_sftp_session(&session_id, &sessions, |_config, sftp| {
         let remote = PathBuf::from(remote_path.trim());
         let stat = sftp.stat(&remote).map_err(|e| format!("读取远程文件元信息失败: {}", e))?;
-        if is_dir_perm(stat.perm) {
+        if stat.is_dir() {
             return Err("暂不支持下载远程目录".to_string());
         }
 

@@ -1,5 +1,30 @@
 import type { Ref } from 'vue'
 
+const normalizeRemoteRow = (item: any) => ({
+  ...item,
+  filename: String(item?.filename || item?.name || ''),
+  isDir: !!(item?.isDir || item?.is_dir),
+  modifiedAt: item?.modifiedAt || item?.mtime || 0,
+})
+
+const normalizeRemoteRows = (items: any[] | undefined) => (items || []).map(normalizeRemoteRow)
+
+const normalizeRemoteBasePath = (path: string) => {
+  const value = String(path || '').trim()
+  if (!value || value === '.') return '.'
+  if (value === '/') return '/'
+  return value.replace(/\/+$/, '') || '/'
+}
+
+const joinRemotePath = (basePath: string, name: string) => {
+  const base = normalizeRemoteBasePath(basePath)
+  const entry = String(name || '').trim().replace(/^\/+/, '')
+  if (!entry) return base
+  if (base === '.') return entry
+  if (base === '/') return `/${entry}`
+  return `${base}/${entry}`
+}
+
 export function useSftpActions(params: {
   sftpPath: Ref<string>
   sftpRows: Ref<any[]>
@@ -46,7 +71,7 @@ export function useSftpActions(params: {
     sftpStatus.value = '读取中...'
     const res = await window.lightterm.sftpList({ ...config, remotePath: sftpPath.value })
     if (!res.ok) return (sftpStatus.value = `读取失败：${res.error}`)
-    sftpRows.value = res.items || []
+    sftpRows.value = normalizeRemoteRows(res.items)
     sftpStatus.value = `已读取 ${sftpRows.value.length} 项`
   }
 
@@ -95,7 +120,7 @@ export function useSftpActions(params: {
       return
     }
     sftpDownloadProgress.value = 0
-    const remoteFile = `${sftpPath.value.replace(/\/$/, '')}/${selectedRemoteFile.value}`
+    const remoteFile = joinRemotePath(sftpPath.value, selectedRemoteFile.value)
     const res = await window.lightterm.sftpDownload({ ...config, remoteFile, conflictPolicy: 'resume', resume: true })
     sftpStatus.value = res.ok ? `下载成功：${res.filePath}` : `下载失败：${res.error}`
   }
@@ -107,7 +132,7 @@ export function useSftpActions(params: {
       return
     }
     if (!sftpNewDirName.value) return
-    const remoteDir = `${sftpPath.value.replace(/\/$/, '')}/${sftpNewDirName.value}`
+    const remoteDir = joinRemotePath(sftpPath.value, sftpNewDirName.value)
     const res = await window.lightterm.sftpMkdir({ ...config, remoteDir })
     sftpStatus.value = res.ok ? `目录已创建：${remoteDir}` : `创建失败：${res.error}`
     if (res.ok) {
@@ -123,8 +148,8 @@ export function useSftpActions(params: {
       return
     }
     if (!selectedRemoteFile.value || !sftpRenameTo.value) return
-    const oldPath = `${sftpPath.value.replace(/\/$/, '')}/${selectedRemoteFile.value}`
-    const newPath = `${sftpPath.value.replace(/\/$/, '')}/${sftpRenameTo.value}`
+    const oldPath = joinRemotePath(sftpPath.value, selectedRemoteFile.value)
+    const newPath = joinRemotePath(sftpPath.value, sftpRenameTo.value)
     const res = await window.lightterm.sftpRename({ ...config, oldPath, newPath })
     sftpStatus.value = res.ok ? `已重命名为：${sftpRenameTo.value}` : `重命名失败：${res.error}`
     if (res.ok) {
@@ -141,7 +166,7 @@ export function useSftpActions(params: {
       return
     }
     if (!selectedRemoteFile.value) return
-    const remoteFile = `${sftpPath.value.replace(/\/$/, '')}/${selectedRemoteFile.value}`
+    const remoteFile = joinRemotePath(sftpPath.value, selectedRemoteFile.value)
     const res = await window.lightterm.sftpDelete({ ...config, remoteFile })
     sftpStatus.value = res.ok ? `已删除：${selectedRemoteFile.value}` : `删除失败：${res.error}`
     if (res.ok) {

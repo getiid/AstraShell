@@ -2,6 +2,7 @@ import { computed, type Ref } from 'vue'
 
 type FsRow = {
   isDir?: boolean
+  is_dir?: boolean
   name?: string
   filename?: string
   createdAt?: number
@@ -82,7 +83,9 @@ export function useSftpViewState(params: UseSftpViewStateParams) {
     sortBy: 'name' | 'modifiedAt' | 'size' | 'kind',
     direction: 'asc' | 'desc',
   ) => [...rows].sort((a, b) => {
-    if (!!a.isDir !== !!b.isDir) return a.isDir ? -1 : 1
+    const aIsDir = !!(a.isDir || a.is_dir)
+    const bIsDir = !!(b.isDir || b.is_dir)
+    if (aIsDir !== bIsDir) return aIsDir ? -1 : 1
     if (sortBy === 'name') {
       const aName = String(a.name || a.filename || '').toLowerCase()
       const bName = String(b.name || b.filename || '').toLowerCase()
@@ -99,8 +102,8 @@ export function useSftpViewState(params: UseSftpViewStateParams) {
       const bSize = Number(b.size || 0)
       if (aSize !== bSize) return direction === 'asc' ? aSize - bSize : bSize - aSize
     } else if (sortBy === 'kind') {
-      const aKind = a.isDir ? '目录' : '文件'
-      const bKind = b.isDir ? '目录' : '文件'
+      const aKind = aIsDir ? '目录' : '文件'
+      const bKind = bIsDir ? '目录' : '文件'
       if (aKind !== bKind) {
         return direction === 'asc'
           ? aKind.localeCompare(bKind, 'zh-Hans-CN')

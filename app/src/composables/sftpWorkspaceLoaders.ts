@@ -1,6 +1,15 @@
 import { useSftpActions } from './useSftpActions'
 import type { LocalSshConfig, UseSftpWorkspaceParams } from './sftpWorkspaceTypes'
 
+const normalizeRemoteRow = (item: any) => ({
+  ...item,
+  filename: String(item?.filename || item?.name || ''),
+  isDir: !!(item?.isDir || item?.is_dir),
+  modifiedAt: item?.modifiedAt || item?.mtime || 0,
+})
+
+const normalizeRemoteRows = (items: any[] | undefined) => (items || []).map(normalizeRemoteRow)
+
 export function createSftpWorkspaceLoaders(params: UseSftpWorkspaceParams) {
   const {
     hostItems,
@@ -132,7 +141,7 @@ export function createSftpWorkspaceLoaders(params: UseSftpWorkspaceParams) {
       sftpStatus.value = `左侧读取失败：${res.error}`
       return
     }
-    leftSftpRows.value = res.items || []
+    leftSftpRows.value = normalizeRemoteRows(res.items)
   }
 
   const toggleLeftConnectPanel = () => {

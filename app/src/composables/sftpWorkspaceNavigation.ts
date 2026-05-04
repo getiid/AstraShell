@@ -1,5 +1,39 @@
 import type { UseSftpWorkspaceParams } from './sftpWorkspaceTypes'
 
+const isRemoteDir = (item: any) => !!(item?.isDir || item?.is_dir)
+
+const normalizeRemoteBasePath = (path: string) => {
+  const value = String(path || '').trim()
+  if (!value || value === '.') return '.'
+  if (value === '/') return '/'
+  return value.replace(/\/+$/, '') || '/'
+}
+
+const joinRemotePath = (basePath: string, name: string) => {
+  const base = normalizeRemoteBasePath(basePath)
+  const entry = String(name || '').trim().replace(/^\/+/, '')
+  if (!entry) return base
+  if (base === '.') return entry
+  if (base === '/') return `/${entry}`
+  return `${base}/${entry}`
+}
+
+const resolveRemoteItemPath = (basePath: string, item: any) => {
+  const itemPath = String(item?.path || '').trim()
+  if (itemPath) return normalizeRemoteBasePath(itemPath)
+  return joinRemotePath(basePath, item?.filename || item?.name || '')
+}
+
+const getRemoteParentPath = (path: string) => {
+  const current = normalizeRemoteBasePath(path)
+  if (current === '.' || current === '/') return current
+  const absolute = current.startsWith('/')
+  const parts = current.split('/').filter(Boolean)
+  if (parts.length <= 1) return absolute ? '/' : '.'
+  const parent = parts.slice(0, -1).join('/')
+  return absolute ? `/${parent}` : parent
+}
+
 type NavigationDeps = {
   loadLocalFs: () => Promise<void>
   loadRightLocalFs: () => Promise<void>
@@ -34,8 +68,8 @@ export function createSftpWorkspaceNavigation(params: UseSftpWorkspaceParams, de
   }
 
   const openLeftRemoteItem = async (item: any) => {
-    if (!item?.isDir) return
-    leftSftpPath.value = `${leftSftpPath.value.replace(/\/$/, '')}/${item.filename}`
+    if (!isRemoteDir(item)) return
+    leftSftpPath.value = resolveRemoteItemPath(leftSftpPath.value, item)
     await loadLeftSftp()
   }
 
@@ -49,8 +83,7 @@ export function createSftpWorkspaceNavigation(params: UseSftpWorkspaceParams, de
 
   const localGoUp = async () => {
     if (leftPanelMode.value === 'remote') {
-      const parts = leftSftpPath.value.split('/').filter(Boolean)
-      leftSftpPath.value = parts.length ? `/${parts.slice(0, -1).join('/')}` || '/' : '/'
+      leftSftpPath.value = getRemoteParentPath(leftSftpPath.value)
       await loadLeftSftp()
       return
     }
@@ -70,8 +103,8 @@ export function createSftpWorkspaceNavigation(params: UseSftpWorkspaceParams, de
 
   const openRemoteItem = async (item: any) => {
     hideRemoteMenu()
-    if (item?.isDir) {
-      sftpPath.value = `${sftpPath.value.replace(/\/$/, '')}/${item.filename}`
+    if (isRemoteDir(item)) {
+      sftpPath.value = resolveRemoteItemPath(sftpPath.value, item)
       await loadSftp()
       return
     }
@@ -96,8 +129,7 @@ export function createSftpWorkspaceNavigation(params: UseSftpWorkspaceParams, de
       await loadRightLocalFs()
       return
     }
-    const parts = sftpPath.value.split('/').filter(Boolean)
-    sftpPath.value = parts.length ? `/${parts.slice(0, -1).join('/')}` || '/' : '/'
+    sftpPath.value = getRemoteParentPath(sftpPath.value)
     await loadSftp()
   }
 
