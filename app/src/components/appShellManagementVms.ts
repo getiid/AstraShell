@@ -76,6 +76,7 @@ export function buildAppShellManagementVms(parts: Record<string, any>) {
       syncDebounceMs: parts.syncDebounceMs,
       syncBusy: parts.syncBusy,
       syncMsg: parts.syncMsg,
+      syncUnsupported: parts.syncUnsupported,
       syncState: parts.syncState,
       syncLocalMeta: parts.syncLocalMeta,
       syncRemoteMeta: parts.syncRemoteMeta,

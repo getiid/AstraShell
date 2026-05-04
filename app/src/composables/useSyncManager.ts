@@ -18,6 +18,7 @@ export function useSyncManager(params: UseSyncManagerParams) {
   const syncDebounceMs = ref(1500)
   const syncBusy = ref(false)
   const syncMsg = ref('')
+  const syncUnsupported = ref(false)
   const syncQueueItems = ref<any[]>([])
   const syncStatusPayload = ref<any | null>(null)
 
@@ -33,6 +34,7 @@ export function useSyncManager(params: UseSyncManagerParams) {
   })
 
   const syncStatusText = computed(() => {
+    if (syncUnsupported.value) return 'Tauri 版本暂未实现同步，请改用上方“本地数据文件”切换现有数据库'
     if (!syncEnabled.value) return '同步已关闭，本地数据库独立运行'
     if (!syncTargetPath.value) return '请先选择同步数据库文件'
     if (syncState.value?.running) return '同步进行中...'
@@ -53,6 +55,7 @@ export function useSyncManager(params: UseSyncManagerParams) {
     if (!payload?.ok) return
     syncStatusPayload.value = payload
     const config = payload.config || {}
+    syncUnsupported.value = !!payload.state?.unsupported
     syncEnabled.value = !!config.enabled
     syncProvider.value = 'folder'
     syncTargetPath.value = String(config.targetPath || '')
@@ -83,6 +86,10 @@ export function useSyncManager(params: UseSyncManagerParams) {
   }
 
   const saveSyncConfig = async () => {
+    if (syncUnsupported.value) {
+      syncMsg.value = 'Tauri 版本暂未实现同步，请改用本地数据文件切换'
+      return
+    }
     syncBusy.value = true
     try {
       const res = await window.lightterm.syncSetConfig({
@@ -119,6 +126,10 @@ export function useSyncManager(params: UseSyncManagerParams) {
   }
 
   const testSyncConnection = async () => {
+    if (syncUnsupported.value) {
+      syncMsg.value = 'Tauri 版本暂未实现同步，请改用本地数据文件切换'
+      return
+    }
     syncBusy.value = true
     try {
       const res = await window.lightterm.syncTestConnection()
@@ -132,6 +143,10 @@ export function useSyncManager(params: UseSyncManagerParams) {
   }
 
   const syncPullNow = async () => {
+    if (syncUnsupported.value) {
+      syncMsg.value = 'Tauri 版本暂未实现同步，请改用本地数据文件切换'
+      return
+    }
     syncBusy.value = true
     try {
       const res = await window.lightterm.syncPullNow()
@@ -145,6 +160,10 @@ export function useSyncManager(params: UseSyncManagerParams) {
   }
 
   const syncPushNow = async () => {
+    if (syncUnsupported.value) {
+      syncMsg.value = 'Tauri 版本暂未实现同步，请改用本地数据文件切换'
+      return
+    }
     syncBusy.value = true
     try {
       const res = await window.lightterm.syncPushNow()
@@ -157,6 +176,10 @@ export function useSyncManager(params: UseSyncManagerParams) {
   }
 
   const syncRetryFailed = async () => {
+    if (syncUnsupported.value) {
+      syncMsg.value = 'Tauri 版本暂未实现同步，请改用本地数据文件切换'
+      return
+    }
     syncBusy.value = true
     try {
       const res = await window.lightterm.syncRetryFailed()
@@ -169,6 +192,10 @@ export function useSyncManager(params: UseSyncManagerParams) {
   }
 
   const clearSyncQueue = async () => {
+    if (syncUnsupported.value) {
+      syncMsg.value = 'Tauri 版本暂未实现同步，请改用本地数据文件切换'
+      return
+    }
     syncBusy.value = true
     try {
       const res = await window.lightterm.syncClearQueue()
@@ -220,6 +247,7 @@ export function useSyncManager(params: UseSyncManagerParams) {
     syncDebounceMs,
     syncBusy,
     syncMsg,
+    syncUnsupported,
     syncQueueItems,
     syncStatusPayload,
     syncState,

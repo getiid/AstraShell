@@ -46,6 +46,30 @@ const { vm } = defineProps<{ vm: any }>()
     <p class="hint">官网：<a class="manual-update-link" href="http://astrashell.851108.xyz" target="_blank" rel="noreferrer">http://astrashell.851108.xyz</a></p>
     <p class="hint">发布新版本到 GitHub Release 后，应用启动会自动检查；也可手动检查并一键更新。</p>
 
+    <h3>本地数据文件</h3>
+    <p>{{ vm.storageMetaText.value || '当前使用本地数据文件运行' }}</p>
+    <div class="storage-backup-card">
+      <div class="hosts-left-title">
+        <span>数据文件切换</span>
+        <span class="hosts-stat">这里才是使用现有数据库文件的入口</span>
+      </div>
+      <div class="storage-path-row">
+        <input
+          v-model="vm.storagePathInput.value"
+          placeholder="选择已有 astrashell.data.json，或选择一个文件夹创建新数据文件"
+        />
+        <div class="storage-path-actions">
+          <button class="muted tiny" @click="vm.pickStorageFile">选择现有数据库</button>
+          <button class="muted tiny" @click="vm.pickStorageFolder">选择文件夹</button>
+          <button class="tiny" @click="vm.applyStoragePath">切换到这个文件</button>
+        </div>
+      </div>
+      <div class="storage-path-actions">
+        <button class="muted tiny" @click="vm.refreshStorageDataNow">刷新当前数据文件</button>
+      </div>
+      <p class="hint">如果你已经有旧数据文件，直接选它，然后点击“切换到这个文件”。不需要走下面的同步中心。</p>
+    </div>
+
     <h3>同步中心</h3>
     <p>{{ vm.syncStatusText.value }}</p>
     <div class="storage-backup-card">
@@ -57,16 +81,17 @@ const { vm } = defineProps<{ vm: any }>()
         <label class="serial-inline-check"><input v-model="vm.syncEnabled.value" type="checkbox" /> 启用同步</label>
         <label class="serial-inline-check"><input v-model="vm.syncAutoPullOnStartup.value" type="checkbox" /> 启动后后台下载</label>
         <label class="serial-inline-check"><input v-model="vm.syncAutoPushOnChange.value" type="checkbox" /> 本地变更后自动上传</label>
-        <input v-model.number="vm.syncDebounceMs.value" type="number" min="300" step="100" placeholder="自动上传防抖 ms" />
+        <input v-model.number="vm.syncDebounceMs.value" type="number" min="300" step="100" placeholder="自动上传防抖 ms" :disabled="vm.syncUnsupported.value" />
       </div>
       <div class="storage-path-row">
         <input
           v-model="vm.syncTargetPath.value"
           placeholder="同步数据库文件（建议放在 iCloud / U盘 / SMB / NAS 挂载目录）"
+          :disabled="vm.syncUnsupported.value"
         />
         <div class="storage-path-actions">
-          <button class="muted tiny" :disabled="vm.syncBusy.value" @click="vm.pickSyncSaveFile">新建数据库</button>
-          <button class="muted tiny" :disabled="vm.syncBusy.value" @click="vm.pickSyncFile">选择数据库</button>
+          <button class="muted tiny" :disabled="vm.syncBusy.value || vm.syncUnsupported.value" @click="vm.pickSyncSaveFile">新建数据库</button>
+          <button class="muted tiny" :disabled="vm.syncBusy.value || vm.syncUnsupported.value" @click="vm.pickSyncFile">选择数据库</button>
         </div>
       </div>
       <div class="grid startup-auth-grid">
@@ -74,22 +99,23 @@ const { vm } = defineProps<{ vm: any }>()
           v-model="vm.syncPassword.value"
           type="password"
           placeholder="同步数据库密码（只用于远端数据库文件加密）"
+          :disabled="vm.syncUnsupported.value"
         />
       </div>
       <p class="hint">先选好同步数据库文件，确认自动同步选项，最后再点击保存配置。</p>
       <div class="storage-path-actions">
         <button class="muted tiny" :disabled="vm.syncBusy.value" @click="vm.refreshSyncStatus">刷新状态</button>
-        <button class="tiny" :disabled="vm.syncBusy.value" @click="vm.saveSyncConfig">保存配置</button>
+        <button class="tiny" :disabled="vm.syncBusy.value || vm.syncUnsupported.value" @click="vm.saveSyncConfig">保存配置</button>
       </div>
       <p>{{ vm.syncMsg.value }}</p>
       <p class="hint">最近上传：{{ vm.formatSyncTime(vm.syncState.value.lastPushAt) }} ｜ 最近下载：{{ vm.formatSyncTime(vm.syncState.value.lastPullAt) }} ｜ 队列：{{ vm.syncQueueCount.value }}</p>
       <p class="hint">本地：{{ vm.syncLocalMeta.value?.itemCount ?? 0 }} 项 ｜ 远端：{{ vm.syncRemoteMeta.value?.itemCount ?? 0 }} 项 ｜ 远端 rev：{{ vm.syncRemoteMeta.value?.revision ?? 0 }} ｜ 文件：{{ vm.syncRemoteMeta.value?.exists ? '存在' : '不存在' }}</p>
       <p class="hint">远端路径：{{ vm.syncRemoteMeta.value?.path || vm.syncTargetPath.value || '-' }}</p>
       <div class="storage-path-actions">
-        <button class="tiny" :disabled="vm.syncBusy.value" @click="vm.syncPullNow">立即下载</button>
-        <button class="tiny" :disabled="vm.syncBusy.value" @click="vm.syncPushNow">立即上传</button>
-        <button class="muted tiny" :disabled="vm.syncBusy.value" @click="vm.syncRetryFailed">重试失败任务</button>
-        <button class="ghost tiny" :disabled="vm.syncBusy.value" @click="vm.clearSyncQueue">清空队列</button>
+        <button class="tiny" :disabled="vm.syncBusy.value || vm.syncUnsupported.value" @click="vm.syncPullNow">立即下载</button>
+        <button class="tiny" :disabled="vm.syncBusy.value || vm.syncUnsupported.value" @click="vm.syncPushNow">立即上传</button>
+        <button class="muted tiny" :disabled="vm.syncBusy.value || vm.syncUnsupported.value" @click="vm.syncRetryFailed">重试失败任务</button>
+        <button class="ghost tiny" :disabled="vm.syncBusy.value || vm.syncUnsupported.value" @click="vm.clearSyncQueue">清空队列</button>
       </div>
       <div class="storage-path-row">
         <select>
